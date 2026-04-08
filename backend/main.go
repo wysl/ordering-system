@@ -69,6 +69,7 @@ func main() {
 			admin.GET("/rounds/:id/export", adminH.ExportRoundHTML)
 			admin.GET("/rounds/:id/export.csv", adminH.ExportRoundCSV)
 			admin.GET("/rounds/:id/export.xlsx", adminH.ExportRoundXLSX)
+			admin.DELETE("/rounds/:id", adminH.DeleteRound)
 			admin.GET("/lookup/person", adminH.LookupPersonCurrent)
 			admin.GET("/persons", personnelH.ListPublic)
 			admin.GET("/export", adminH.ExportHTML)

@@ -59,10 +59,15 @@ func (h *AdminHandler) ListOrders(c *gin.Context) {
 }
 
 func (h *AdminHandler) GetParticipationStatus(c *gin.Context) {
+	modeFilter := strings.TrimSpace(c.Query("mode"))
 	var persons []model.Person
 	h.DB.Order("name asc").Find(&persons)
 	var round model.ActivityRound
-	err := h.DB.Where("active = ?", true).Order("id desc").First(&round).Error
+	q := h.DB.Where("active = ?", true).Order("id desc")
+	if modeFilter != "" {
+		q = q.Where("mode = ?", modeFilter)
+	}
+	err := q.First(&round).Error
 	if err == gorm.ErrRecordNotFound {
 		c.JSON(200, gin.H{"mode": "idle", "total_count": len(persons), "done_count": 0, "pending": namesFromPersons(persons)})
 		return
@@ -85,7 +90,7 @@ func (h *AdminHandler) GetParticipationStatus(c *gin.Context) {
 	for _, p := range persons {
 		if _, ok := doneSet[p.Name]; !ok { pending = append(pending, p.Name) }
 	}
-	c.JSON(200, gin.H{"mode": round.Mode, "round_id": round.ID, "title": round.Title, "total_count": len(persons), "done_count": len(doneSet), "pending": pending})
+	c.JSON(200, gin.H{"mode": round.Mode, "round_id": round.ID, "title": round.Title, "deadline_at": round.DeadlineAt, "total_count": len(persons), "done_count": len(doneSet), "pending": pending})
 }
 
 func namesFromPersons(persons []model.Person) []string {
@@ -95,8 +100,13 @@ func namesFromPersons(persons []model.Person) []string {
 }
 
 func (h *AdminHandler) EndActiveRound(c *gin.Context) {
+	modeFilter := strings.TrimSpace(c.Query("mode"))
 	now := time.Now()
-	res := h.DB.Model(&model.ActivityRound{}).Where("active = ?", true).Updates(map[string]any{
+	q := h.DB.Model(&model.ActivityRound{}).Where("active = ?", true)
+	if modeFilter != "" {
+		q = q.Where("mode = ?", modeFilter)
+	}
+	res := q.Updates(map[string]any{
 		"active": false,
 		"closed_at": &now,
 	})
@@ -105,6 +115,38 @@ func (h *AdminHandler) EndActiveRound(c *gin.Context) {
 		return
 	}
 	c.JSON(200, gin.H{"ended": res.RowsAffected > 0})
+}
+
+func (h *AdminHandler) DeleteRound(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(400, gin.H{"error": "无效轮次ID"})
+		return
+	}
+	var round model.ActivityRound
+	if err := h.DB.First(&round, id).Error; err != nil {
+		c.JSON(404, gin.H{"error": "轮次不存在"})
+		return
+	}
+	_ = h.DB.Transaction(func(tx *gorm.DB) error {
+		if round.Mode == "order" {
+			var orders []model.Order
+			tx.Where("round_id = ?", round.ID).Find(&orders)
+			for _, o := range orders { tx.Where("order_id = ?", o.ID).Delete(&model.OrderItem{}) }
+			tx.Where("round_id = ?", round.ID).Delete(&model.Order{})
+			tx.Where("round_id = ?", round.ID).Delete(&model.Menu{})
+		} else {
+			var sessions []model.VoteSession
+			tx.Where("round_id = ?", round.ID).Find(&sessions)
+			for _, s := range sessions {
+				tx.Where("vote_session_id = ?", s.ID).Delete(&model.Vote{})
+				tx.Where("vote_session_id = ?", s.ID).Delete(&model.VotePizza{})
+			}
+			tx.Where("round_id = ?", round.ID).Delete(&model.VoteSession{})
+		}
+		return tx.Delete(&model.ActivityRound{}, round.ID).Error
+	})
+	c.JSON(200, gin.H{"deleted": true})
 }
 
 func (h *AdminHandler) ListRounds(c *gin.Context) {
@@ -344,6 +386,38 @@ func (h *AdminHandler) TemplateDownload(c *gin.Context) {
 }
 
 func (h *AdminHandler) ExportHTML(c *gin.Context) {
+	mode := strings.TrimSpace(c.Query("mode"))
+	if mode == "vote" {
+		round, err := getActiveRound(h.DB, "vote")
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(400, gin.H{"error": "当前没有进行中的投票"})
+			return
+		}
+		if err != nil {
+			c.JSON(500, gin.H{"error": "查询投票失败"})
+			return
+		}
+		var voteSessions []model.VoteSession
+		h.DB.Where("round_id = ?", round.ID).Preload("Pizzas").Preload("Votes").Find(&voteSessions)
+		var b strings.Builder
+		b.WriteString(`<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>` + round.Title + `</title><style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:20px;background:#f5f5f5}.container{max-width:720px;margin:0 auto}.card{background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.08);padding:16px;margin-bottom:12px}.item{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #eee}.item:last-child{border-bottom:0}</style></head><body><div class="container"><h1 style="text-align:center">` + round.Title + `</h1>`)
+		for _, vs := range voteSessions {
+			b.WriteString(`<div class="card"><div style="font-weight:700;margin-bottom:8px">` + vs.Title + `</div>`)
+			for _, p := range vs.Pizzas {
+				count := 0
+				for _, v := range vs.Votes { if v.PizzaID == p.ID { count++ } }
+				need := 0
+				if p.Servings > 0 { need = int(math.Ceil(float64(count) / float64(p.Servings))) }
+				b.WriteString(`<div class="item"><div>` + p.Name + `</div><div>` + fmt.Sprintf(`%d 票 / 需订 %d 个`, count, need) + `</div></div>`)
+			}
+			b.WriteString(`</div>`)
+		}
+		b.WriteString(`</div></body></html>`)
+		c.Header("Content-Type", "text/html; charset=utf-8")
+		c.String(200, b.String())
+		return
+	}
+
 	round, err := getActiveRound(h.DB, "order")
 	if err == gorm.ErrRecordNotFound {
 		c.JSON(400, gin.H{"error": "当前没有进行中的点餐轮次"})
@@ -374,7 +448,7 @@ func (h *AdminHandler) ExportHTML(c *gin.Context) {
 	sort.Strings(keys)
 	spicyLabels := map[int]string{0: "不辣", 1: "微辣", 2: "中辣", 3: "重辣"}
 	var b strings.Builder
-	b.WriteString(`<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>点餐汇总</title><style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:20px;background:#f5f5f5}.container{max-width:720px;margin:0 auto}h1,h2{text-align:center}.card,table{background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.1)}.card{margin-bottom:12px;overflow:hidden}.card-header{display:flex;justify-content:space-between;padding:16px;cursor:pointer}.card-detail{display:none;padding:0 16px 16px;border-top:1px solid #eee}.card-detail.open{display:block}.total-badge{background:#ff6b6b;color:#fff;padding:4px 12px;border-radius:20px}table{width:100%;border-collapse:collapse;margin:16px 0}.vote-card{background:#fff;border-radius:12px;margin-bottom:12px;box-shadow:0 2px 8px rgba(0,0,0,.1);padding:16px}.vote-item{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0}</style></head><body><div class="container"><h1>🍜 点餐汇总</h1>`)
+	b.WriteString(`<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>` + round.Title + `</title><style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:20px;background:#f5f5f5}.container{max-width:720px;margin:0 auto}h1,h2{text-align:center}.card,table{background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.1)}.card{margin-bottom:12px;overflow:hidden}.card-header{display:flex;justify-content:space-between;padding:16px;cursor:pointer}.card-detail{display:none;padding:0 16px 16px;border-top:1px solid #eee}.card-detail.open{display:block}.total-badge{background:#ff6b6b;color:#fff;padding:4px 12px;border-radius:20px}table{width:100%;border-collapse:collapse;margin:16px 0}.vote-card{background:#fff;border-radius:12px;margin-bottom:12px;box-shadow:0 2px 8px rgba(0,0,0,.1);padding:16px}.vote-item{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0}</style></head><body><div class="container"><h1>` + round.Title + `</h1>`)
 	grandTotal := 0
 	for _, k := range keys {
 		item := summary[k]
@@ -401,26 +475,6 @@ func (h *AdminHandler) ExportHTML(c *gin.Context) {
 		b.WriteString(`<td style="text-align:center;font-weight:bold">` + strconv.Itoa(item.GrandTotal) + `</td></tr>`)
 	}
 	b.WriteString(`</tbody></table>`)
-
-	var voteRound model.ActivityRound
-	if err := h.DB.Where("mode = ?", "vote").Order("id desc").First(&voteRound).Error; err == nil {
-		var voteSessions []model.VoteSession
-		h.DB.Where("round_id = ?", voteRound.ID).Preload("Pizzas").Preload("Votes").Find(&voteSessions)
-		if len(voteSessions) > 0 {
-			b.WriteString(`<h2>🍕 投票结果</h2>`)
-			for _, vs := range voteSessions {
-				b.WriteString(`<div class="vote-card"><div><strong>` + vs.Title + `</strong></div>`)
-				for _, p := range vs.Pizzas {
-					count := 0
-					for _, v := range vs.Votes { if v.PizzaID == p.ID { count++ } }
-					need := 0
-					if p.Servings > 0 { need = int(math.Ceil(float64(count) / float64(p.Servings))) }
-					b.WriteString(`<div class="vote-item"><div>` + p.Name + `</div><div>` + fmt.Sprintf(`%d 票 → 需订购 %d 个`, count, need) + `</div></div>`)
-				}
-				b.WriteString(`</div>`)
-			}
-		}
-	}
 	b.WriteString(`</div><script>function toggle(el){el.nextElementSibling.classList.toggle('open')}</script></body></html>`)
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	c.String(200, b.String())

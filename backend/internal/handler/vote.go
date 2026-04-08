@@ -33,7 +33,7 @@ func (h *VoteHandler) CreateVoteSession(c *gin.Context) {
 	}
 	var roundID uint
 	err := h.DB.Transaction(func(tx *gorm.DB) error {
-		if err := deactivateAllRounds(tx); err != nil {
+		if err := deactivateRoundsByMode(tx, "vote"); err != nil {
 			return err
 		}
 		var deadline *time.Time

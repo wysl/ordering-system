@@ -37,9 +37,7 @@ func (h *PersonnelHandler) Import(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "文件读取失败"})
 		return
 	}
-	content := string(buf)
-	// Strip BOM if present
-	content = strings.TrimPrefix(content, "\xEF\xBB\xBF")
+	content := decodeCSVContent(buf)
 
 	reader := csv.NewReader(strings.NewReader(content))
 
@@ -53,6 +51,7 @@ func (h *PersonnelHandler) Import(c *gin.Context) {
 	h.DB.Exec("DELETE FROM people")
 
 	var persons []model.Person
+	seen := map[string]struct{}{}
 	lineNum := 1
 	for {
 		record, err := reader.Read()
@@ -72,6 +71,11 @@ func (h *PersonnelHandler) Import(c *gin.Context) {
 			lineNum++
 			continue
 		}
+		if _, ok := seen[name]; ok {
+			lineNum++
+			continue
+		}
+		seen[name] = struct{}{}
 		persons = append(persons, model.Person{Name: name})
 		lineNum++
 	}

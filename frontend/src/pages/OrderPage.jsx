@@ -5,13 +5,15 @@ import { getHomeState, submitOrder, castVote, getPersonnel, getMyOrder } from '.
 const spicyLevelLabels = ['', '微辣', '中辣', '重辣']
 
 function StatusBadge({ mode }) {
+  const normalized = mode === 'idle' ? 'idle' : mode.includes('点餐') && mode.includes('投票') ? 'both' : mode.includes('点餐') ? 'order' : mode.includes('投票') ? 'vote' : 'idle'
   const map = {
     order: 'bg-emerald-50 text-emerald-700 border-emerald-200',
     vote: 'bg-violet-50 text-violet-700 border-violet-200',
+    both: 'bg-amber-50 text-amber-700 border-amber-200',
     idle: 'bg-slate-50 text-slate-600 border-slate-200',
   }
-  const text = mode === 'order' ? '进行中 · 点餐' : mode === 'vote' ? '进行中 · 投票' : '空闲中'
-  return <span className={`inline-flex items-center px-3 py-1 rounded-full border text-sm font-medium ${map[mode] || map.idle}`}>{text}</span>
+  const text = mode === 'idle' ? '空闲中' : mode
+  return <span className={`inline-flex items-center px-3 py-1 rounded-full border text-sm font-medium ${map[normalized] || map.idle}`}>{text}</span>
 }
 
 function PageTabs({ current }) {
@@ -24,29 +26,28 @@ function PageTabs({ current }) {
 }
 
 export default function OrderPage({ defaultTab = 'order' }) {
+  const currentTab = defaultTab === 'vote' ? 'vote' : 'order'
   const [selectedPerson, setSelectedPerson] = useState('')
   const [personnelList, setPersonnelList] = useState([])
   const [homeState, setHomeState] = useState({ mode: 'idle' })
-  const [selectedDishId, setSelectedDishId] = useState(null)
-  const [selectedPizzaId, setSelectedPizzaId] = useState(null)
+  const [selectedDishId, setSelectedDishId] = useState('')
+  const [selectedPizzaId, setSelectedPizzaId] = useState('')
   const [remark, setRemark] = useState('')
   const [spicyLevel, setSpicyLevel] = useState(1)
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
-  const [countdownText, setCountdownText] = useState('')
   const [success, setSuccess] = useState(false)
   const [successMsg, setSuccessMsg] = useState('')
   const [error, setError] = useState('')
 
-  const currentTab = defaultTab === 'vote' ? 'vote' : 'order'
-  const isOrderMode = homeState.mode === 'order'
-  const isVoteMode = homeState.mode === 'vote'
+  const isOrderMode = !!homeState.order
+  const isVoteMode = !!homeState.vote
   const showingOrderTab = currentTab === 'order'
   const showingVoteTab = currentTab === 'vote'
-  const canOperate = (showingOrderTab && isOrderMode) || (showingVoteTab && isVoteMode)
-  const menuList = homeState.menu || []
-  const voteSessions = homeState.votes || []
+  const menuList = homeState.order?.menu || []
+  const voteSessions = homeState.vote?.votes || []
   const activeVote = voteSessions[0]
+  const canOperate = (showingOrderTab && isOrderMode) || (showingVoteTab && isVoteMode)
 
   const fetchHomeState = useCallback(async () => {
     setLoading(true)
@@ -74,7 +75,7 @@ export default function OrderPage({ defaultTab = 'order' }) {
       const existing = res.data
       if (existing?.items?.length > 0) {
         const firstItem = existing.items[0]
-        setSelectedDishId(firstItem.menu_id)
+        setSelectedDishId(String(firstItem.menu_id || ''))
         setRemark(existing.remark || '')
         if (firstItem.spicy_level) setSpicyLevel(firstItem.spicy_level)
       }
@@ -83,36 +84,15 @@ export default function OrderPage({ defaultTab = 'order' }) {
 
   useEffect(() => { fetchHomeState() }, [fetchHomeState])
   useEffect(() => { fetchPersonnel() }, [fetchPersonnel])
-  useEffect(() => {
-    if (!homeState.deadline_at) {
-      setCountdownText('')
-      return
-    }
-    const tick = () => {
-      const diff = new Date(homeState.deadline_at).getTime() - Date.now()
-      if (diff <= 0) {
-        setCountdownText('已截止，页面将自动刷新')
-        fetchHomeState()
-        return
-      }
-      const h = Math.floor(diff / 3600000)
-      const m = Math.floor((diff % 3600000) / 60000)
-      const s = Math.floor((diff % 60000) / 1000)
-      setCountdownText(`倒计时 ${h}小时 ${m}分 ${s}秒`)
-    }
-    tick()
-    const timer = setInterval(tick, 1000)
-    return () => clearInterval(timer)
-  }, [homeState.deadline_at, fetchHomeState])
 
-  const selectedDish = useMemo(() => menuList.find(m => m.id === selectedDishId), [menuList, selectedDishId])
-  const selectedPizza = useMemo(() => activeVote?.pizzas?.find(p => p.id === selectedPizzaId), [activeVote, selectedPizzaId])
+  const selectedDish = useMemo(() => menuList.find(m => String(m.id) === String(selectedDishId)), [menuList, selectedDishId])
+  const selectedPizza = useMemo(() => activeVote?.pizzas?.find(p => String(p.id) === String(selectedPizzaId)), [activeVote, selectedPizzaId])
 
   const handlePersonChange = async (e) => {
     const person = e.target.value
     setSelectedPerson(person)
-    setSelectedDishId(null)
-    setSelectedPizzaId(null)
+    setSelectedDishId('')
+    setSelectedPizzaId('')
     setRemark('')
     setSpicyLevel(1)
     setError('')
@@ -121,13 +101,18 @@ export default function OrderPage({ defaultTab = 'order' }) {
 
   const handleSubmit = async () => {
     if (!selectedPerson.trim()) return setError('请选择您的姓名')
+
     if (showingOrderTab) {
       if (!selectedDishId) return setError('请选择一道菜品')
       setSubmitting(true)
       setError('')
       try {
-        await submitOrder({ person: selectedPerson.trim(), remark: remark.trim(), items: [{ menu_id: selectedDishId, quantity: 1, ...(selectedDish?.spicy > 0 ? { spicy_level: spicyLevel } : {}) }] })
-        setSuccessMsg(`${selectedPerson} 已完成本轮点餐：${selectedDish?.name || ''}${selectedDish?.spicy > 0 ? `（${spicyLevelLabels[spicyLevel]}）` : ''}${remark.trim() ? `；备注：${remark.trim()}` : ''}`)
+        await submitOrder({
+          person: selectedPerson.trim(),
+          remark: remark.trim(),
+          items: [{ menu_id: Number(selectedDishId), quantity: 1, ...(selectedDish?.spicy > 0 ? { spicy_level: spicyLevel } : {}) }],
+        })
+        setSuccessMsg(`${selectedPerson} 已完成本次点餐：${selectedDish?.name || ''}${selectedDish?.spicy > 0 ? `（${spicyLevelLabels[spicyLevel]}）` : ''}${remark.trim() ? `；备注：${remark.trim()}` : ''}`)
         setSuccess(true)
       } catch (e) {
         setError(e.response?.data?.error || '提交订单失败')
@@ -136,13 +121,14 @@ export default function OrderPage({ defaultTab = 'order' }) {
       }
       return
     }
+
     if (showingVoteTab) {
       if (!selectedPizzaId || !activeVote) return setError('请选择一个投票选项')
       setSubmitting(true)
       setError('')
       try {
-        await castVote({ vote_session_id: activeVote.id, person: selectedPerson.trim(), pizza_id: selectedPizzaId })
-        setSuccessMsg(`${selectedPerson} 已投票：${selectedPizza?.name || ''}`)
+        await castVote({ vote_session_id: activeVote.id, person: selectedPerson.trim(), pizza_id: Number(selectedPizzaId) })
+        setSuccessMsg(`${selectedPerson} 已完成本次投票：${selectedPizza?.name || ''}`)
         setSuccess(true)
       } catch (e) {
         setError(e.response?.data?.error || '投票失败')
@@ -165,11 +151,11 @@ export default function OrderPage({ defaultTab = 'order' }) {
           <p className="text-slate-500 mb-6">{successMsg}</p>
           <div className="bg-slate-50 rounded-2xl p-4 text-left text-sm text-slate-600 mb-6">
             <div>姓名：<span className="font-semibold text-slate-800">{selectedPerson}</span></div>
-            <div>当前活动：<span className="font-semibold text-slate-800">{homeState.title || (showingVoteTab ? '投票轮次' : '点餐轮次')}</span></div>
+            <div>当前活动：<span className="font-semibold text-slate-800">{homeState.title || (showingVoteTab ? '投票' : '点餐')}</span></div>
             <div>你的选择：<span className="font-semibold text-slate-800">{showingVoteTab ? selectedPizza?.name : selectedDish?.name}</span></div>
             {showingOrderTab && remark.trim() && <div>备注：<span className="font-semibold text-slate-800">{remark.trim()}</span></div>}
           </div>
-          <button onClick={() => { setSuccess(false); setSelectedDishId(null); setSelectedPizzaId(null); setRemark(''); fetchHomeState() }} className="px-6 py-3 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white rounded-2xl font-medium transition shadow-lg shadow-orange-200">返回继续处理</button>
+          <button onClick={() => { setSuccess(false); setSelectedDishId(''); setSelectedPizzaId(''); setRemark(''); fetchHomeState() }} className="px-6 py-3 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white rounded-2xl font-medium transition shadow-lg shadow-orange-200">返回继续处理</button>
         </div>
       </div>
     )
@@ -182,10 +168,10 @@ export default function OrderPage({ defaultTab = 'order' }) {
         <div className="relative flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex-1 min-w-0">
             <div className="text-sm text-slate-400 mb-2">当前活动</div>
-            <h1 className="text-3xl font-bold text-slate-900 mb-3">{homeState.title || '智慧点餐 / 投票'}</h1>
+            <h1 className="text-3xl font-bold text-slate-900 mb-3">{homeState.title || '点餐 / 投票'}</h1>
             <p className="text-slate-500 max-w-xl">请选择姓名后完成当前活动。本页会根据后台状态显示当前可执行的流程。</p>
-            {homeState.deadline_at && <p className="mt-3 text-sm text-orange-600">⏰ 截止时间：{new Date(homeState.deadline_at).toLocaleString()}</p>}
-            {countdownText && <p className="mt-1 text-xs text-slate-500">{countdownText}</p>}
+            {homeState.order?.deadline_at && showingOrderTab && <p className="mt-3 text-sm text-orange-600">⏰ 截止时间：{new Date(homeState.order.deadline_at).toLocaleString()}</p>}
+            {homeState.vote?.deadline_at && showingVoteTab && <p className="mt-3 text-sm text-orange-600">⏰ 截止时间：{new Date(homeState.vote.deadline_at).toLocaleString()}</p>}
           </div>
           <div className="flex flex-col gap-3 lg:items-end lg:text-right shrink-0">
             <StatusBadge mode={homeState.mode} />
@@ -194,51 +180,41 @@ export default function OrderPage({ defaultTab = 'order' }) {
         </div>
       </section>
 
-      <section className="grid gap-6 md:grid-cols-[1.1fr,0.9fr]">
+      <section className="grid gap-6 md:grid-cols-1">
         <div className="bg-white rounded-3xl border border-white shadow-lg shadow-slate-100 p-6">
           <div className="text-sm font-semibold text-slate-500 mb-3">第一步 · 选择姓名</div>
           <select value={selectedPerson} onChange={handlePersonChange} disabled={submitting} className="w-full px-4 py-3 rounded-2xl border border-slate-200 focus:border-amber-400 focus:ring-4 focus:ring-amber-100 outline-none transition text-slate-700 bg-white disabled:opacity-50">
             <option value="" hidden>请选择你的姓名...</option>
             {personnelList.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}
           </select>
-          <p className="mt-3 text-xs text-slate-400">选择后会自动加载你在当前轮次的已有记录（如果存在）。</p>
-        </div>
-        <div className="bg-white rounded-3xl border border-white shadow-lg shadow-slate-100 p-6">
-          <div className="text-sm font-semibold text-slate-500 mb-3">第二步 · 当前说明</div>
-          {showingOrderTab && isOrderMode && <div className="space-y-2 text-sm text-slate-600"><div className="font-semibold text-emerald-700">当前是点餐轮次</div><div>每人提交一份当前轮次选择，可重复进入修改。</div><div>如果菜品支持辣度，选中后可继续设置。</div></div>}
-          {showingVoteTab && isVoteMode && <div className="space-y-2 text-sm text-slate-600"><div className="font-semibold text-violet-700">当前是投票轮次</div><div>每人只能投 1 项，提交后即记入本轮结果。</div><div>选项卡会显示每个披萨可供人数。</div></div>}
-          {(!canOperate) && <div className="space-y-2 text-sm text-slate-500"><div className="font-semibold text-slate-700">{showingOrderTab ? '当前没有进行中的点餐轮次' : '当前没有进行中的投票轮次'}</div><div>{showingOrderTab ? '如需参与投票，请切换到“投票”标签页。' : '如需点餐，请切换到“点餐”标签页。'}</div></div>}
+          <p className="mt-3 text-xs text-slate-400">选择后会自动加载你在当前活动中的已有记录（如果存在）。</p>
         </div>
       </section>
 
       {showingOrderTab && isOrderMode && (
         <section className="bg-white rounded-3xl border border-white shadow-lg shadow-slate-100 p-6">
           <div className="flex items-center justify-between mb-4">
-            <div><div className="text-sm font-semibold text-slate-500">第二步 · 选择菜品</div><div className="text-xs text-slate-400 mt-1">更像真实点餐卡片，选中后再确认</div></div>
+            <div>
+              <div className="text-sm font-semibold text-slate-500">第二步 · 选择菜品</div>
+              <div className="text-xs text-slate-400 mt-1">使用下拉框选择菜品，随后设置辣度和备注</div>
+            </div>
             {selectedDish && <div className="px-3 py-1 rounded-full bg-amber-50 text-amber-700 text-sm font-medium border border-amber-200">已选：{selectedDish.name}</div>}
           </div>
-          <div className="space-y-3">
-            {menuList.map(item => {
-              const isSelected = selectedDishId === item.id
-              const isDisabled = selectedDishId !== null && !isSelected
-              return (
-                <div key={item.id} onClick={() => !isDisabled && setSelectedDishId(isSelected ? null : item.id)} className={`rounded-3xl border p-5 transition cursor-pointer ${isSelected ? 'border-amber-400 ring-4 ring-amber-100 shadow-lg shadow-amber-100 bg-amber-50/40' : isDisabled ? 'border-slate-200 opacity-50 pointer-events-none bg-slate-50' : 'border-slate-200 hover:border-amber-200 hover:shadow-md bg-white'}`}>
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="min-w-0"><div className="font-semibold text-slate-800 text-lg">{item.name}</div><div className="mt-1 text-xs text-slate-400">{item.spicy > 0 ? `支持辣度选择（最高 ${spicyLevelLabels[item.spicy]}）` : '标准菜品，无需额外设置'}</div></div>
-                    <div className={`w-8 h-8 shrink-0 rounded-full border-2 flex items-center justify-center ${isSelected ? 'border-amber-500 bg-amber-500 text-white' : 'border-slate-300 text-transparent'}`}>✓</div>
-                  </div>
-                  {isSelected && item.spicy > 0 && (
-                    <div className="mt-4 rounded-2xl bg-white border border-amber-100 px-4 py-3 flex items-center gap-3" onClick={e => e.stopPropagation()}>
-                      <span className="text-sm text-slate-500">辣度</span>
-                      <select value={spicyLevel} onChange={e => setSpicyLevel(parseInt(e.target.value))} className="text-sm px-3 py-2 rounded-xl border border-slate-200 focus:border-amber-400 outline-none">
-                        {[1, 2, 3].map(level => <option key={level} value={level}>{'🌶️'.repeat(level)} {spicyLevelLabels[level]}</option>)}
-                      </select>
-                    </div>
-                  )}
-                </div>
-              )
-            })}
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <label className="text-sm font-semibold text-slate-600 mb-2 block">菜品</label>
+            <select value={selectedDishId} onChange={e => setSelectedDishId(e.target.value)} className="w-full px-4 py-3 rounded-2xl border border-slate-200 bg-white text-sm outline-none focus:border-amber-400">
+              <option value="">请选择菜品...</option>
+              {menuList.map(item => <option key={item.id} value={item.id}>{item.name}{item.spicy > 0 ? '（支持辣度）' : ''}</option>)}
+            </select>
           </div>
+          {selectedDish && selectedDish.spicy > 0 && (
+            <div className="mt-4 rounded-2xl bg-white border border-amber-100 px-4 py-3 flex items-center gap-3">
+              <span className="text-sm text-slate-500">辣度</span>
+              <select value={spicyLevel} onChange={e => setSpicyLevel(parseInt(e.target.value))} className="text-sm px-3 py-2 rounded-xl border border-slate-200 focus:border-amber-400 outline-none">
+                {[1, 2, 3].map(level => <option key={level} value={level}>{'🌶️'.repeat(level)} {spicyLevelLabels[level]}</option>)}
+              </select>
+            </div>
+          )}
           <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
             <div className="text-sm font-semibold text-slate-600 mb-2">第三步 · 备注（可选）</div>
             <textarea value={remark} onChange={e => setRemark(e.target.value)} rows={3} maxLength={120} placeholder="例如：少饭、不要葱、打包分开..." className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-amber-400" />
@@ -249,14 +225,17 @@ export default function OrderPage({ defaultTab = 'order' }) {
       {showingVoteTab && isVoteMode && activeVote && (
         <section className="bg-white rounded-3xl border border-white shadow-lg shadow-slate-100 p-6">
           <div className="flex items-center justify-between mb-4">
-            <div><div className="text-sm font-semibold text-slate-500">第二步 · 选择投票项</div><div className="text-xs text-slate-400 mt-1">每人只能选 1 项，确认后计入当前轮次</div></div>
+            <div>
+              <div className="text-sm font-semibold text-slate-500">第三步 · 选择投票项</div>
+              <div className="text-xs text-slate-400 mt-1">每人只能选 1 项，确认后计入当前活动</div>
+            </div>
             {selectedPizza && <div className="px-3 py-1 rounded-full bg-violet-50 text-violet-700 text-sm font-medium border border-violet-200">已选：{selectedPizza.name}</div>}
           </div>
           <div className="space-y-3">
             {(activeVote.pizzas || []).map(pizza => {
-              const isSelected = selectedPizzaId === pizza.id
+              const isSelected = String(selectedPizzaId) === String(pizza.id)
               return (
-                <div key={pizza.id} onClick={() => setSelectedPizzaId(isSelected ? null : pizza.id)} className={`rounded-3xl border p-5 transition cursor-pointer ${isSelected ? 'border-violet-400 ring-4 ring-violet-100 shadow-lg shadow-violet-100 bg-violet-50/40' : 'border-slate-200 hover:border-violet-200 hover:shadow-md bg-white'}`}>
+                <div key={pizza.id} onClick={() => setSelectedPizzaId(isSelected ? '' : String(pizza.id))} className={`rounded-3xl border p-5 transition cursor-pointer ${isSelected ? 'border-violet-400 ring-4 ring-violet-100 shadow-lg shadow-violet-100 bg-violet-50/40' : 'border-slate-200 hover:border-violet-200 hover:shadow-md bg-white'}`}>
                   <div className="flex items-center justify-between gap-4">
                     <div><div className="font-semibold text-slate-800 text-lg">{pizza.name}</div><div className="mt-1 text-xs text-slate-400">建议分食人数：{pizza.servings} 人</div></div>
                     <div className="flex items-center gap-3"><span className="px-3 py-1 rounded-full bg-slate-100 text-slate-600 text-xs">{pizza.servings}人/个</span><div className={`w-8 h-8 rounded-full border-2 flex items-center justify-center ${isSelected ? 'border-violet-500 bg-violet-500 text-white' : 'border-slate-300 text-transparent'}`}>✓</div></div>
@@ -271,7 +250,7 @@ export default function OrderPage({ defaultTab = 'order' }) {
       {!canOperate && (
         <section className="bg-white rounded-3xl border border-dashed border-slate-200 shadow-sm p-10 text-center text-slate-400">
           <div className="text-5xl mb-3">🕐</div>
-          <div className="text-lg font-semibold text-slate-700 mb-1">{showingOrderTab ? '当前没有进行中的点餐轮次' : '当前没有进行中的投票轮次'}</div>
+          <div className="text-lg font-semibold text-slate-700 mb-1">{showingOrderTab ? '当前没有进行中的点餐' : '当前没有进行中的投票'}</div>
           <p>{showingOrderTab ? '如需参与投票，请切换到“投票”标签页。' : '如需点餐，请切换到“点餐”标签页。'}</p>
         </section>
       )}

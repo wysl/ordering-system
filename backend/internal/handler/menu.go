@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/csv"
 	"io"
 	"net/http"
 	"strconv"
@@ -16,6 +17,37 @@ import (
 type MenuHandler struct {
 	DB *gorm.DB
 }
+
+func parseMenuImport(content string) (string, []csvMenu) {
+	r := csv.NewReader(strings.NewReader(content))
+	r.FieldsPerRecord = -1
+	records, _ := r.ReadAll()
+	if len(records) == 0 { return "点餐", nil }
+	title := strings.TrimSpace(records[0][0])
+	start := 1
+	if len(records) > 1 && strings.Contains(strings.Join(records[1], ","), "餐品") {
+		start = 2
+	} else if strings.Contains(strings.Join(records[0], ","), "餐品") {
+		title = "点餐"
+		start = 1
+	}
+	var result []csvMenu
+	for i := start; i < len(records); i++ {
+		row := records[i]
+		if len(row) < 1 { continue }
+		name := strings.TrimSpace(row[0])
+		if name == "" { continue }
+		spicy := 0
+		if len(row) > 1 {
+			s := strings.TrimSpace(row[1])
+			if s != "" { spicy, _ = strconv.Atoi(s) }
+		}
+		result = append(result, csvMenu{name: name, spicy: spicy})
+	}
+	if title == "" { title = "点餐" }
+	return title, result
+}
+
 
 // GET /api/menu
 func (h *MenuHandler) ListPublic(c *gin.Context) {
@@ -67,8 +99,8 @@ func (h *MenuHandler) Import(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "文件读取失败"})
 		return
 	}
-	content := strings.TrimPrefix(string(buf), "\xEF\xBB\xBF")
-	importMenus := parseCSV(content)
+	content := decodeCSVContent(buf)
+	roundTitle, importMenus := parseMenuImport(content)
 	if len(importMenus) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "CSV无有效数据"})
 		return
@@ -76,7 +108,7 @@ func (h *MenuHandler) Import(c *gin.Context) {
 
 	var roundID uint
 	err = h.DB.Transaction(func(tx *gorm.DB) error {
-		if err := deactivateAllRounds(tx); err != nil {
+		if err := deactivateRoundsByMode(tx, "order"); err != nil {
 			return err
 		}
 		var deadline *time.Time
@@ -86,7 +118,7 @@ func (h *MenuHandler) Import(c *gin.Context) {
 				deadline = &parsed
 			}
 		}
-		round := model.ActivityRound{Mode: "order", Title: "点餐轮次", Active: true, DeadlineAt: deadline}
+		round := model.ActivityRound{Mode: "order", Title: roundTitle, Active: true, DeadlineAt: deadline}
 		if err := tx.Create(&round).Error; err != nil {
 			return err
 		}

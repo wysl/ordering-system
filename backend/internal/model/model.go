@@ -16,10 +16,11 @@ type ActivityRound struct {
 }
 
 type Menu struct {
-	ID      uint   `gorm:"primarykey" json:"id"`
-	RoundID uint   `gorm:"not null;index" json:"round_id"`
-	Name    string `gorm:"not null" json:"name"`
-	Spicy   int    `gorm:"default:0" json:"spicy"`
+	ID           uint   `gorm:"primarykey" json:"id"`
+	RoundID      uint   `gorm:"not null;index" json:"round_id"`
+	Name         string `gorm:"not null" json:"name"`
+	Spicy        int    `gorm:"default:0" json:"spicy"`              // deprecated, kept for backward compatibility
+	SpicyOptions string `gorm:"default:\"\"" json:"spicy_options"`   // ""=no spicy, "2"=single, "1,2,3"=multiple
 }
 
 type Person struct {

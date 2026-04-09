@@ -18,6 +18,42 @@ type MenuHandler struct {
 	DB *gorm.DB
 }
 
+type csvMenu struct {
+	name          string
+	spicy_options string
+}
+
+// parseSpicyOptions converts "1-3" to "1,2,3" or "2" to "2" or "" to ""
+func parseSpicyOptions(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "" // no spicy
+	}
+	if strings.Contains(s, "-") {
+		// Range format "1-3" → "1,2,3"
+		parts := strings.Split(s, "-")
+		if len(parts) != 2 {
+			return ""
+		}
+		start, err1 := strconv.Atoi(strings.TrimSpace(parts[0]))
+		end, err2 := strconv.Atoi(strings.TrimSpace(parts[1]))
+		if err1 != nil || err2 != nil || start > end || start < 0 || end > 3 {
+			return ""
+		}
+		var opts []string
+		for i := start; i <= end; i++ {
+			opts = append(opts, strconv.Itoa(i))
+		}
+		return strings.Join(opts, ",")
+	}
+	// Single value "2" → "2"
+	v, err := strconv.Atoi(s)
+	if err != nil || v < 0 || v > 3 {
+		return ""
+	}
+	return strconv.Itoa(v)
+}
+
 func parseMenuImport(content string) (string, []csvMenu) {
 	r := csv.NewReader(strings.NewReader(content))
 	r.FieldsPerRecord = -1
@@ -37,12 +73,11 @@ func parseMenuImport(content string) (string, []csvMenu) {
 		if len(row) < 1 { continue }
 		name := strings.TrimSpace(row[0])
 		if name == "" { continue }
-		spicy := 0
+		spicyOpts := ""
 		if len(row) > 1 {
-			s := strings.TrimSpace(row[1])
-			if s != "" { spicy, _ = strconv.Atoi(s) }
+			spicyOpts = parseSpicyOptions(row[1])
 		}
-		result = append(result, csvMenu{name: name, spicy: spicy})
+		result = append(result, csvMenu{name: name, spicy_options: spicyOpts})
 	}
 	if title == "" { title = "点餐" }
 	return title, result
@@ -125,7 +160,7 @@ func (h *MenuHandler) Import(c *gin.Context) {
 		roundID = round.ID
 		menus := make([]model.Menu, 0, len(importMenus))
 		for _, m := range importMenus {
-			menus = append(menus, model.Menu{RoundID: round.ID, Name: m.name, Spicy: m.spicy})
+			menus = append(menus, model.Menu{RoundID: round.ID, Name: m.name, SpicyOptions: m.spicy_options})
 		}
 		return tx.Create(&menus).Error
 	})

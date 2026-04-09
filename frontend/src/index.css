@@ -1,18 +1,35 @@
 @import "tailwindcss";
 
 :root {
-  --color-brand: #f59e0b;
-  --color-brand-light: #fef3c7;
-  --color-brand-dark: #d97706;
+  /* Notion-inspired color palette */
+  --color-bg: #FFFFFF;
+  --color-surface: #F7F6F3;
+  --color-surface-hover: #EFEFED;
+  --color-border: #E8E7E4;
+  --color-text-primary: #37352F;
+  --color-text-secondary: #787774;
+  --color-text-tertiary: #9B9A97;
+  --color-accent: #2EAADC;
+  --color-accent-hover: #1A8CB7;
+  --color-success: #4EAD5B;
+  --color-warning: #D4A726;
+  --color-error: #EB5757;
 }
 
 body {
-  background: #f8fafc;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #F7F6F3;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+  color: #37352F;
 }
 
 @theme {
-  --color-brand: #f59e0b;
-  --color-brand-light: #fef3c7;
-  --color-brand-dark: #d97706;
+  --color-brand: #2EAADC;
+  --color-brand-light: rgba(46, 170, 220, 0.15);
+  --color-brand-dark: #1A8CB7;
+  --color-surface: #F7F6F3;
+  --color-surface-hover: #EFEFED;
+  --color-border: #E8E7E4;
+  --color-text-primary: #37352F;
+  --color-text-secondary: #787774;
+  --color-text-tertiary: #9B9A97;
 }

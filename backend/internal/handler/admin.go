@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"math"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -22,6 +23,14 @@ import (
 
 type AdminHandler struct {
 	DB *gorm.DB
+}
+
+func contentDispositionAttachment(filename string) string {
+	safe := strings.NewReplacer("\r", "", "\n", "", "\"", "'").Replace(strings.TrimSpace(filename))
+	if safe == "" {
+		safe = "export.html"
+	}
+	return fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, safe, url.PathEscape(safe))
 }
 
 func (h *AdminHandler) Login(c *gin.Context) {
@@ -220,47 +229,109 @@ func (h *AdminHandler) ExportRoundHTML(c *gin.Context) {
 		c.JSON(404, gin.H{"error": "轮次不存在"})
 		return
 	}
-	if round.Mode != "order" {
-		c.JSON(400, gin.H{"error": "当前仅支持导出点餐轮次"})
+
+	if round.Mode == "order" {
+		// Order mode export logic
+		var orders []model.Order
+		h.DB.Where("round_id = ?", round.ID).Preload("Items").Preload("Items.Menu").Find(&orders)
+		// Get menu title from first order's first item
+		var menuTitle string = "点餐"
+		if len(orders) > 0 && len(orders[0].Items) > 0 && orders[0].Items[0].Menu != nil {
+			menuTitle = orders[0].Items[0].Menu.Name
+		} else {
+			// Fallback: query menus directly for this round
+			var firstMenu model.Menu
+			if err := h.DB.Where("round_id = ?", round.ID).Order("id asc").First(&firstMenu).Error; err == nil {
+				menuTitle = firstMenu.Name
+			}
+		}
+		type summaryItem struct{ Name string; TotalBySpicy map[int]int; PersonsBySpicy map[int][]string; GrandTotal int }
+		summary := map[string]*summaryItem{}
+		for _, order := range orders {
+			for _, item := range order.Items {
+				key := item.Menu.Name
+				if _, ok := summary[key]; !ok {
+					summary[key] = &summaryItem{Name: item.Menu.Name, TotalBySpicy: map[int]int{}, PersonsBySpicy: map[int][]string{}}
+				}
+				s := summary[key]
+				s.TotalBySpicy[item.SpicyLevel] += item.Quantity
+				s.GrandTotal += item.Quantity
+				s.PersonsBySpicy[item.SpicyLevel] = append(s.PersonsBySpicy[item.SpicyLevel], order.Person)
+			}
+		}
+		keys := make([]string, 0, len(summary))
+		for k := range summary {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		spicyLabels := map[int]string{0: "不辣", 1: "微辣", 2: "中辣", 3: "重辣"}
+		var b strings.Builder
+		b.WriteString(`<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><title>历史轮次导出</title><style>body{font-family:sans-serif;padding:20px;background:#f5f5f5}.container{max-width:720px;margin:0 auto}table,.card{background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.08)}.card{padding:16px;margin-bottom:12px}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{padding:10px;border-bottom:1px solid #eee;text-align:left}</style></head><body><div class="container"><h1>` + round.Title + `</h1><div class="card">创建时间：` + round.CreatedAt.Format("2006-01-02 15:04") + `</div><table><thead><tr><th>菜品</th><th>不辣</th><th>微辣</th><th>中辣</th><th>重辣</th><th>合计</th></tr></thead><tbody>`)
+		for _, k := range keys {
+			item := summary[k]
+			b.WriteString(`<tr><td>` + item.Name + `</td>`)
+			for level := 0; level <= 3; level++ {
+				if item.TotalBySpicy[level] == 0 {
+					b.WriteString(`<td>-</td>`)
+				} else {
+					b.WriteString(`<td>` + strconv.Itoa(item.TotalBySpicy[level]) + `</td>`)
+				}
+			}
+			b.WriteString(`<td>` + strconv.Itoa(item.GrandTotal) + `</td></tr>`)
+		}
+		b.WriteString(`</tbody></table><h2>明细</h2>`)
+		for _, order := range orders {
+			b.WriteString(`<div class="card"><strong>` + order.Person + `</strong><div style="margin-top:8px">`)
+			for _, item := range order.Items {
+				b.WriteString(`<div>` + item.Menu.Name + ` × ` + strconv.Itoa(item.Quantity) + ` ` + spicyLabels[item.SpicyLevel] + `</div>`)
+			}
+			if strings.TrimSpace(order.Remark) != "" {
+				b.WriteString(`<div style="margin-top:8px;color:#666">备注：` + order.Remark + `</div>`)
+			}
+			b.WriteString(`</div></div>`)
+		}
+		b.WriteString(`</div></body></html>`)
+		c.Header("Content-Type", "text/html; charset=utf-8")
+		c.Header("Content-Disposition", contentDispositionAttachment(menuTitle+".html"))
+		c.String(200, b.String())
+		return
+	} else if round.Mode == "vote" {
+		// Vote mode export logic
+		var voteSessions []model.VoteSession
+		h.DB.Where("round_id = ?", round.ID).Preload("Pizzas").Preload("Votes").Find(&voteSessions)
+		// Get vote title from first vote session
+		var voteTitle string = "投票"
+		if len(voteSessions) > 0 {
+			voteTitle = voteSessions[0].Title
+		}
+		var b strings.Builder
+		b.WriteString(`<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>` + round.Title + `</title><style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:20px;background:#f5f5f5}.container{max-width:720px;margin:0 auto}.card{background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.08);padding:16px;margin-bottom:12px}.item{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #eee}.item:last-child{border-bottom:0}</style></head><body><div class="container"><h1 style="text-align:center">` + round.Title + `</h1>`)
+		for _, vs := range voteSessions {
+			b.WriteString(`<div class="card"><div style="font-weight:700;margin-bottom:8px">` + vs.Title + `</div>`)
+			for _, p := range vs.Pizzas {
+				count := 0
+				for _, v := range vs.Votes {
+					if v.PizzaID == p.ID {
+						count++
+					}
+				}
+				need := 0
+				if p.Servings > 0 {
+					need = int(math.Ceil(float64(count) / float64(p.Servings)))
+				}
+				b.WriteString(`<div class="item"><div>` + p.Name + `</div><div>` + fmt.Sprintf(`%d 票 / 需订 %d 个`, count, need) + `</div></div>`)
+			}
+			b.WriteString(`</div>`)
+		}
+		b.WriteString(`</div></body></html>`)
+		c.Header("Content-Type", "text/html; charset=utf-8")
+		c.Header("Content-Disposition", contentDispositionAttachment(voteTitle+".html"))
+		c.String(200, b.String())
+		return
+	} else {
+		c.JSON(400, gin.H{"error": "不支持的轮次类型"})
 		return
 	}
-	// temporarily export this round using same logic
-	var orders []model.Order
-	h.DB.Where("round_id = ?", round.ID).Preload("Items").Preload("Items.Menu").Find(&orders)
-	type summaryItem struct { Name string; TotalBySpicy map[int]int; PersonsBySpicy map[int][]string; GrandTotal int }
-	summary := map[string]*summaryItem{}
-	for _, order := range orders {
-		for _, item := range order.Items {
-			key := item.Menu.Name
-			if _, ok := summary[key]; !ok {
-				summary[key] = &summaryItem{Name: item.Menu.Name, TotalBySpicy: map[int]int{}, PersonsBySpicy: map[int][]string{}}
-			}
-			s := summary[key]
-			s.TotalBySpicy[item.SpicyLevel] += item.Quantity
-			s.GrandTotal += item.Quantity
-			s.PersonsBySpicy[item.SpicyLevel] = append(s.PersonsBySpicy[item.SpicyLevel], order.Person)
-		}
-	}
-	keys := make([]string, 0, len(summary)); for k := range summary { keys = append(keys, k) }; sort.Strings(keys)
-	spicyLabels := map[int]string{0: "不辣", 1: "微辣", 2: "中辣", 3: "重辣"}
-	var b strings.Builder
-	b.WriteString(`<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><title>历史轮次导出</title><style>body{font-family:sans-serif;padding:20px;background:#f5f5f5}.container{max-width:720px;margin:0 auto}table,.card{background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.08)}.card{padding:16px;margin-bottom:12px}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{padding:10px;border-bottom:1px solid #eee;text-align:left}</style></head><body><div class="container"><h1>` + round.Title + `</h1><div class="card">创建时间：` + round.CreatedAt.Format("2006-01-02 15:04") + `</div><table><thead><tr><th>菜品</th><th>不辣</th><th>微辣</th><th>中辣</th><th>重辣</th><th>合计</th></tr></thead><tbody>`)
-	for _, k := range keys {
-		item := summary[k]
-		b.WriteString(`<tr><td>` + item.Name + `</td>`)
-		for level := 0; level <= 3; level++ { if item.TotalBySpicy[level] == 0 { b.WriteString(`<td>-</td>`) } else { b.WriteString(`<td>` + strconv.Itoa(item.TotalBySpicy[level]) + `</td>`) } }
-		b.WriteString(`<td>` + strconv.Itoa(item.GrandTotal) + `</td></tr>`)
-	}
-	b.WriteString(`</tbody></table><h2>明细</h2>`)
-	for _, order := range orders {
-		b.WriteString(`<div class="card"><strong>` + order.Person + `</strong><div style="margin-top:8px">`)
-		for _, item := range order.Items { b.WriteString(`<div>` + item.Menu.Name + ` × ` + strconv.Itoa(item.Quantity) + ` ` + spicyLabels[item.SpicyLevel] + `</div>`) }
-		if strings.TrimSpace(order.Remark) != "" { b.WriteString(`<div style="margin-top:8px;color:#666">备注：` + order.Remark + `</div>`) }
-		b.WriteString(`</div></div>`)
-	}
-	b.WriteString(`</div></body></html>`)
-	c.Header("Content-Type", "text/html; charset=utf-8")
-	c.String(200, b.String())
 }
 
 func (h *AdminHandler) ExportRoundCSV(c *gin.Context) {
@@ -372,8 +443,8 @@ func (h *AdminHandler) TemplateDownload(c *gin.Context) {
 	c.Header("Content-Type", "text/csv; charset=utf-8")
 	switch t {
 	case "spicy":
-		c.Header("Content-Disposition", `attachment; filename="template_spicy.csv"`)
-		c.Data(200, "text/csv; charset=utf-8", []byte("\xEF\xBB\xBF餐品名,辣度\n"))
+		c.Header("Content-Disposition", `attachment; filename="template_menu.csv"`)
+		c.Data(200, "text/csv; charset=utf-8", []byte("\xEF\xBB\xBF餐品名,可选辣度(1-3)\n宫保鸡丁,1-3\n麻婆豆腐,2\n番茄炒蛋,\n蛋炒饭,1-2\n"))
 	case "plain":
 		c.Header("Content-Disposition", `attachment; filename="template_plain.csv"`)
 		c.Data(200, "text/csv; charset=utf-8", []byte("\xEF\xBB\xBF餐品名\n"))
@@ -480,22 +551,3 @@ func (h *AdminHandler) ExportHTML(c *gin.Context) {
 	c.String(200, b.String())
 }
 
-type csvMenu struct { name string; spicy int }
-
-func parseCSV(content string) []csvMenu {
-	r := csv.NewReader(strings.NewReader(content))
-	records, _ := r.ReadAll()
-	var result []csvMenu
-	for i, row := range records {
-		if i == 0 || len(row) < 1 { continue }
-		name := strings.TrimSpace(row[0])
-		if name == "" { continue }
-		spicy := 0
-		if len(row) > 1 {
-			s := strings.TrimSpace(row[1])
-			if s != "" { spicy, _ = strconv.Atoi(s) }
-		}
-		result = append(result, csvMenu{name: name, spicy: spicy})
-	}
-	return result
-}

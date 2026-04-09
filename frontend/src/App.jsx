@@ -6,7 +6,14 @@ function NavLink({ to, children }) {
   const location = useLocation()
   const active = location.pathname === to
   return (
-    <Link to={to} className={`px-3 py-1.5 rounded-full text-sm font-medium transition ${active ? 'bg-amber-500 text-white shadow-sm' : 'bg-white/70 text-slate-600 hover:bg-white'}`}>
+    <Link
+      to={to}
+      className={`px-3 py-1.5 rounded-md text-sm font-medium transition ${
+        active
+          ? 'bg-[#2EAADC] text-white'
+          : 'text-[#787774] hover:bg-[#F7F6F3] hover:text-[#37352F]'
+      }`}
+    >
       {children}
     </Link>
   )
@@ -14,17 +21,19 @@ function NavLink({ to, children }) {
 
 export default function App() {
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_#fff7ed,_#f8fafc_45%,_#eef2ff)] text-slate-800">
-      <header className="sticky top-0 z-20 backdrop-blur supports-[backdrop-filter]:bg-white/70 bg-white/90 border-b border-white/60 shadow-sm">
+    <div className="min-h-screen text-[#37352F]">
+      <header className="sticky top-0 z-20 bg-white border-b border-[#E8E7E4]">
         <div className="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between gap-4">
           <Link to="/" className="flex items-center gap-3 group">
-            <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-amber-400 to-orange-500 text-white flex items-center justify-center shadow-lg shadow-orange-200">🍽️</div>
+            <div className="w-10 h-10 rounded-lg bg-[#2EAADC] text-white flex items-center justify-center">
+              🍽️
+            </div>
             <div>
-              <div className="text-lg font-bold bg-gradient-to-r from-amber-600 to-orange-500 bg-clip-text text-transparent">HappySystem</div>
-              <div className="text-xs text-slate-400">更顺手的点餐 / 投票轮次系统</div>
+              <div className="text-lg font-bold text-[#37352F]">HappySystem</div>
+              <div className="text-xs text-[#787774]">更顺手的点餐 / 投票轮次系统</div>
             </div>
           </Link>
-          <nav className="flex gap-2 items-center">
+          <nav className="flex gap-2 items-center bg-[#F7F6F3] p-1 rounded-md">
             <NavLink to="/">首页</NavLink>
             <NavLink to="/admin/people">后台管理</NavLink>
           </nav>
@@ -40,7 +49,7 @@ export default function App() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
-      <footer className="text-center py-8 text-slate-400 text-xs">
+      <footer className="text-center py-8 text-[#787774] text-xs border-t border-[#E8E7E4] bg-white">
         HappySystem © {new Date().getFullYear()} · 面向真实轮次管理优化
       </footer>
     </div>

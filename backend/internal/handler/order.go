@@ -59,6 +59,9 @@ func (h *OrderHandler) HomeState(c *gin.Context) {
 	if orderRound != nil {
 		var menus []model.Menu
 		h.DB.Where("round_id = ?", orderRound.ID).Order("id asc").Find(&menus)
+		for i := range menus {
+			normalizeMenuSpicy(&menus[i])
+		}
 		resp["order"] = gin.H{
 			"round_id":    orderRound.ID,
 			"title":       orderRound.Title,
@@ -139,8 +142,12 @@ func (h *OrderHandler) Create(c *gin.Context) {
 	err = h.DB.Transaction(func(tx *gorm.DB) error {
 		var oldOrder model.Order
 		if err := tx.Where("round_id = ? AND person = ?", round.ID, req.Person).First(&oldOrder).Error; err == nil {
-			if err := tx.Where("order_id = ?", oldOrder.ID).Delete(&model.OrderItem{}).Error; err != nil { return err }
-			if err := tx.Delete(&oldOrder).Error; err != nil { return err }
+			if err := tx.Where("order_id = ?", oldOrder.ID).Delete(&model.OrderItem{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Delete(&oldOrder).Error; err != nil {
+				return err
+			}
 		}
 		order := model.Order{RoundID: round.ID, Person: req.Person, Remark: strings.TrimSpace(req.Remark), Items: orderItems}
 		return tx.Create(&order).Error

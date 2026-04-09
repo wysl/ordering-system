@@ -34,7 +34,9 @@ func contentDispositionAttachment(filename string) string {
 }
 
 func (h *AdminHandler) Login(c *gin.Context) {
-	var req struct{ Password string `json:"password"` }
+	var req struct {
+		Password string `json:"password"`
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"error": "无效请求"})
 		return
@@ -89,22 +91,30 @@ func (h *AdminHandler) GetParticipationStatus(c *gin.Context) {
 	if round.Mode == "order" {
 		var names []string
 		h.DB.Raw("SELECT DISTINCT person FROM orders WHERE round_id = ?", round.ID).Scan(&names)
-		for _, n := range names { doneSet[n] = struct{}{} }
+		for _, n := range names {
+			doneSet[n] = struct{}{}
+		}
 	} else if round.Mode == "vote" {
 		var names []string
 		h.DB.Raw(`SELECT DISTINCT votes.person FROM votes JOIN vote_sessions ON vote_sessions.id = votes.vote_session_id WHERE vote_sessions.round_id = ?`, round.ID).Scan(&names)
-		for _, n := range names { doneSet[n] = struct{}{} }
+		for _, n := range names {
+			doneSet[n] = struct{}{}
+		}
 	}
 	pending := make([]string, 0)
 	for _, p := range persons {
-		if _, ok := doneSet[p.Name]; !ok { pending = append(pending, p.Name) }
+		if _, ok := doneSet[p.Name]; !ok {
+			pending = append(pending, p.Name)
+		}
 	}
 	c.JSON(200, gin.H{"mode": round.Mode, "round_id": round.ID, "title": round.Title, "deadline_at": round.DeadlineAt, "total_count": len(persons), "done_count": len(doneSet), "pending": pending})
 }
 
 func namesFromPersons(persons []model.Person) []string {
 	out := make([]string, 0, len(persons))
-	for _, p := range persons { out = append(out, p.Name) }
+	for _, p := range persons {
+		out = append(out, p.Name)
+	}
 	return out
 }
 
@@ -116,7 +126,7 @@ func (h *AdminHandler) EndActiveRound(c *gin.Context) {
 		q = q.Where("mode = ?", modeFilter)
 	}
 	res := q.Updates(map[string]any{
-		"active": false,
+		"active":    false,
 		"closed_at": &now,
 	})
 	if res.Error != nil {
@@ -141,7 +151,9 @@ func (h *AdminHandler) DeleteRound(c *gin.Context) {
 		if round.Mode == "order" {
 			var orders []model.Order
 			tx.Where("round_id = ?", round.ID).Find(&orders)
-			for _, o := range orders { tx.Where("order_id = ?", o.ID).Delete(&model.OrderItem{}) }
+			for _, o := range orders {
+				tx.Where("order_id = ?", o.ID).Delete(&model.OrderItem{})
+			}
 			tx.Where("round_id = ?", round.ID).Delete(&model.Order{})
 			tx.Where("round_id = ?", round.ID).Delete(&model.Menu{})
 		} else {
@@ -236,7 +248,7 @@ func (h *AdminHandler) ExportRoundHTML(c *gin.Context) {
 		h.DB.Where("round_id = ?", round.ID).Preload("Items").Preload("Items.Menu").Find(&orders)
 		// Get menu title from first order's first item
 		var menuTitle string = "点餐"
-		if len(orders) > 0 && len(orders[0].Items) > 0 && orders[0].Items[0].Menu != nil {
+		if len(orders) > 0 && len(orders[0].Items) > 0 && orders[0].Items[0].Menu.ID != 0 {
 			menuTitle = orders[0].Items[0].Menu.Name
 		} else {
 			// Fallback: query menus directly for this round
@@ -245,7 +257,12 @@ func (h *AdminHandler) ExportRoundHTML(c *gin.Context) {
 				menuTitle = firstMenu.Name
 			}
 		}
-		type summaryItem struct{ Name string; TotalBySpicy map[int]int; PersonsBySpicy map[int][]string; GrandTotal int }
+		type summaryItem struct {
+			Name           string
+			TotalBySpicy   map[int]int
+			PersonsBySpicy map[int][]string
+			GrandTotal     int
+		}
 		summary := map[string]*summaryItem{}
 		for _, order := range orders {
 			for _, item := range order.Items {
@@ -440,15 +457,60 @@ func (h *AdminHandler) LookupPersonCurrent(c *gin.Context) {
 
 func (h *AdminHandler) TemplateDownload(c *gin.Context) {
 	t := c.Param("type")
-	c.Header("Content-Type", "text/csv; charset=utf-8")
 	switch t {
 	case "spicy":
-		c.Header("Content-Disposition", `attachment; filename="template_menu.csv"`)
-		c.Data(200, "text/csv; charset=utf-8", []byte("\xEF\xBB\xBF餐品名,可选辣度(1-3)\n宫保鸡丁,1-3\n麻婆豆腐,2\n番茄炒蛋,\n蛋炒饭,1-2\n"))
+		f := excelize.NewFile()
+		defer func() { _ = f.Close() }()
+		sheet := f.GetSheetName(0)
+		f.SetSheetName(sheet, "菜单模板")
+		sheet = "菜单模板"
+		rows := [][]any{
+			{"午餐点餐"},
+			{"宫保鸡丁", "1-3"},
+			{"麻婆豆腐", "2"},
+			{"番茄炒蛋", ""},
+			{"口水鸡", "微辣/中辣/重辣"},
+		}
+		for i, row := range rows {
+			cell, _ := excelize.CoordinatesToCellName(1, i+1)
+			f.SetSheetRow(sheet, cell, &row)
+		}
+		_ = f.SetCellValue(sheet, "D1", "填写说明")
+		_ = f.SetCellValue(sheet, "D2", "A1 填店名/本轮标题")
+		_ = f.SetCellValue(sheet, "D3", "A2 开始填菜品名")
+		_ = f.SetCellValue(sheet, "D4", "B2 开始选填辣度")
+		_ = f.SetCellValue(sheet, "D5", "支持 1-3、1-3、微辣/中辣/重辣")
+		f.SetColWidth(sheet, "A", "B", 28)
+		f.SetColWidth(sheet, "D", "D", 30)
+		c.Header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+		c.Header("Content-Disposition", `attachment; filename="template_menu.xlsx"`)
+		_ = f.Write(c.Writer)
 	case "plain":
-		c.Header("Content-Disposition", `attachment; filename="template_plain.csv"`)
-		c.Data(200, "text/csv; charset=utf-8", []byte("\xEF\xBB\xBF餐品名\n"))
+		f := excelize.NewFile()
+		defer func() { _ = f.Close() }()
+		sheet := f.GetSheetName(0)
+		f.SetSheetName(sheet, "菜单模板")
+		sheet = "菜单模板"
+		rows := [][]any{
+			{"午餐点餐"},
+			{"宫保鸡丁"},
+			{"麻婆豆腐"},
+			{"番茄炒蛋"},
+		}
+		for i, row := range rows {
+			cell, _ := excelize.CoordinatesToCellName(1, i+1)
+			f.SetSheetRow(sheet, cell, &row)
+		}
+		_ = f.SetCellValue(sheet, "C1", "填写说明")
+		_ = f.SetCellValue(sheet, "C2", "A1 填店名/本轮标题")
+		_ = f.SetCellValue(sheet, "C3", "A2 开始填菜品名")
+		f.SetColWidth(sheet, "A", "A", 28)
+		f.SetColWidth(sheet, "C", "C", 30)
+		c.Header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+		c.Header("Content-Disposition", `attachment; filename="template_plain.xlsx"`)
+		_ = f.Write(c.Writer)
 	case "personnel":
+		c.Header("Content-Type", "text/csv; charset=utf-8")
 		c.Header("Content-Disposition", `attachment; filename="template_personnel.csv"`)
 		c.Data(200, "text/csv; charset=utf-8", []byte("\xEF\xBB\xBF姓名\n"))
 	default:
@@ -476,9 +538,15 @@ func (h *AdminHandler) ExportHTML(c *gin.Context) {
 			b.WriteString(`<div class="card"><div style="font-weight:700;margin-bottom:8px">` + vs.Title + `</div>`)
 			for _, p := range vs.Pizzas {
 				count := 0
-				for _, v := range vs.Votes { if v.PizzaID == p.ID { count++ } }
+				for _, v := range vs.Votes {
+					if v.PizzaID == p.ID {
+						count++
+					}
+				}
 				need := 0
-				if p.Servings > 0 { need = int(math.Ceil(float64(count) / float64(p.Servings))) }
+				if p.Servings > 0 {
+					need = int(math.Ceil(float64(count) / float64(p.Servings)))
+				}
 				b.WriteString(`<div class="item"><div>` + p.Name + `</div><div>` + fmt.Sprintf(`%d 票 / 需订 %d 个`, count, need) + `</div></div>`)
 			}
 			b.WriteString(`</div>`)
@@ -500,7 +568,12 @@ func (h *AdminHandler) ExportHTML(c *gin.Context) {
 	}
 	var orders []model.Order
 	h.DB.Where("round_id = ?", round.ID).Preload("Items").Preload("Items.Menu").Find(&orders)
-	type summaryItem struct { Name string; TotalBySpicy map[int]int; PersonsBySpicy map[int][]string; GrandTotal int }
+	type summaryItem struct {
+		Name           string
+		TotalBySpicy   map[int]int
+		PersonsBySpicy map[int][]string
+		GrandTotal     int
+	}
 	summary := map[string]*summaryItem{}
 	for _, order := range orders {
 		for _, item := range order.Items {
@@ -515,7 +588,9 @@ func (h *AdminHandler) ExportHTML(c *gin.Context) {
 		}
 	}
 	keys := make([]string, 0, len(summary))
-	for k := range summary { keys = append(keys, k) }
+	for k := range summary {
+		keys = append(keys, k)
+	}
 	sort.Strings(keys)
 	spicyLabels := map[int]string{0: "不辣", 1: "微辣", 2: "中辣", 3: "重辣"}
 	var b strings.Builder
@@ -527,9 +602,13 @@ func (h *AdminHandler) ExportHTML(c *gin.Context) {
 		b.WriteString(`<div class="card"><div class="card-header" onclick="toggle(this)"><div>` + item.Name + `</div><div><span class="total-badge">` + strconv.Itoa(item.GrandTotal) + `</span></div></div><div class="card-detail">`)
 		for level := 0; level <= 3; level++ {
 			count := item.TotalBySpicy[level]
-			if count == 0 { continue }
+			if count == 0 {
+				continue
+			}
 			b.WriteString(`<div><strong>` + spicyLabels[level] + `</strong> ` + strconv.Itoa(count) + ` 份<ul>`)
-			for _, p := range item.PersonsBySpicy[level] { b.WriteString(`<li>` + p + `</li>`) }
+			for _, p := range item.PersonsBySpicy[level] {
+				b.WriteString(`<li>` + p + `</li>`)
+			}
 			b.WriteString(`</ul></div>`)
 		}
 		b.WriteString(`</div></div>`)
@@ -541,7 +620,11 @@ func (h *AdminHandler) ExportHTML(c *gin.Context) {
 		b.WriteString(`<tr><td style="padding:10px">` + item.Name + `</td>`)
 		for level := 0; level <= 3; level++ {
 			count := item.TotalBySpicy[level]
-			if count == 0 { b.WriteString(`<td style="text-align:center;color:#ccc">-</td>`) } else { b.WriteString(`<td style="text-align:center">` + strconv.Itoa(count) + `</td>`) }
+			if count == 0 {
+				b.WriteString(`<td style="text-align:center;color:#ccc">-</td>`)
+			} else {
+				b.WriteString(`<td style="text-align:center">` + strconv.Itoa(count) + `</td>`)
+			}
 		}
 		b.WriteString(`<td style="text-align:center;font-weight:bold">` + strconv.Itoa(item.GrandTotal) + `</td></tr>`)
 	}
@@ -550,4 +633,3 @@ func (h *AdminHandler) ExportHTML(c *gin.Context) {
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	c.String(200, b.String())
 }
-

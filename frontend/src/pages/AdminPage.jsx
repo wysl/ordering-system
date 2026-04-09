@@ -500,7 +500,7 @@ export default function AdminPage({ defaultTab = 'order' }) {
       const url = URL.createObjectURL(new Blob([res.data]))
       const a = document.createElement('a')
       a.href = url
-      a.download = type === 'personnel' ? '人员模板.csv' : '菜单模板.csv'
+      a.download = type === 'personnel' ? '人员模板.csv' : '菜单模板.xlsx'
       document.body.appendChild(a)
       a.click()
       a.remove()
@@ -643,7 +643,7 @@ export default function AdminPage({ defaultTab = 'order' }) {
               <label className="flex-1">
                 <input
                   type="file"
-                  accept=".csv"
+                  accept=".csv,.xlsx"
                   onChange={handleImport}
                   disabled={importing}
                   className="block w-full text-sm text-[#787774] file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-[#F7F6F3] file:text-[#37352F] hover:file:bg-[#EFEFED] cursor-pointer disabled:opacity-50"
@@ -651,7 +651,7 @@ export default function AdminPage({ defaultTab = 'order' }) {
               </label>
               {importing && <span className="text-sm text-[#9B9A97]">导入中...</span>}
             </div>
-            <p className="text-xs text-[#9B9A97] mb-3">导入会生成本次点餐活动。</p>
+            <p className="text-xs text-[#9B9A97] mb-3">导入会生成本次点餐活动。支持 CSV / XLSX；A1 填店名/本轮标题，A2 开始填菜品，B2 开始可选填辣度。辣度支持留空、1-3、2、以及微辣/中辣/重辣等写法。</p>
             <div className="flex gap-3 flex-wrap">
               <button onClick={() => handleDownloadTemplate('spicy')} className="px-4 py-2 text-sm bg-[#F7F6F3] text-[#787774] rounded-md border border-[#E8E7E4] transition">
                 📥 下载模板

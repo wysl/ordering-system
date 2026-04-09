@@ -53,6 +53,18 @@ cd /root/.openclaw/workspace-dev/tasks/ordering-system/frontend
 npm run dev -- --host 0.0.0.0
 ```
 
+### 菜单导入说明
+- 管理后台支持导入 `CSV` / `XLSX` 菜单文件
+- 推荐优先使用后台下载的 `XLSX` 模板
+- `A1`：填写店名 / 本轮标题
+- `A2` 开始：填写菜品名
+- `B2` 开始：可选填写辣度
+- 辣度支持留空、`1`、`2`、`3`、`1-3`、`微辣/中辣/重辣` 等写法
+- 导入后会自动关闭旧点餐轮次，并开启新的点餐轮次
+- 如果当前只有点餐进行中：首页标题显示店名
+- 如果点餐和投票同时进行中：首页标题显示 `店名 & 投票标题`
+- 最近历史中的点餐标题同样取自导入文件的 `A1`
+
 ### 生产部署建议
 1. 后端使用 systemd / pm2 / supervisor 常驻 `ordering-backend`
 2. 前端使用 `npm run build` 后通过 nginx / caddy 托管 `frontend/dist`

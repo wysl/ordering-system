@@ -1,5 +1,49 @@
 @import "tailwindcss";
 
+/* Mobile touch optimization */
+@media (max-width: 640px) {
+  /* Ensure minimum touch target size */
+  button, a, [role="button"] {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  /* Improve mobile scrolling */
+  body {
+    -webkit-overflow-scrolling: touch;
+  }
+  /* Fix sticky elements on mobile */
+  .sticky-bottom-mobile {
+    position: sticky;
+    bottom: 0;
+    z-index: 10;
+  }
+  /* Prevent horizontal overflow */
+  * {
+    overflow-wrap: break-word;
+  }
+}
+
+/* Admin sidebar / panel mobile adjustments */
+@media (max-width: 768px) {
+  .admin-card-grid {
+    grid-template-columns: 1fr !important;
+  }
+  /* Ensure form inputs are comfortable on mobile */
+  input[type="text"],
+  input[type="password"],
+  input[type="email"],
+  input[type="number"],
+  input[type="date"],
+  select,
+  textarea {
+    font-size: 16px !important; /* Prevents iOS zoom on focus */
+  }
+  /* Improve table/scroll containers on mobile */
+  .overflow-auto {
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
 :root {
   /* Notion-inspired color palette */
   --color-bg: #FFFFFF;

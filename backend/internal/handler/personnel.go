@@ -97,5 +97,11 @@ func (h *PersonnelHandler) Import(c *gin.Context) {
 func (h *PersonnelHandler) ListPublic(c *gin.Context) {
 	var persons []model.Person
 	h.DB.Order("name ASC").Find(&persons)
-	c.JSON(http.StatusOK, persons)
+	filtered := make([]model.Person, 0, len(persons))
+	for _, p := range persons {
+		if !p.OrderExcused && !p.VoteExcused {
+			filtered = append(filtered, p)
+		}
+	}
+	c.JSON(http.StatusOK, filtered)
 }

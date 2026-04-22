@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="drawio" version="29.7.8">
+  <diagram name="Architecture" id="arch-1">
+    <mxGraphModel dx="1422" dy="794" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1100" pageHeight="850" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        
+        <!-- TIER 1: Client -->
+        <mxCell id="client" value="Web Browser" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=14;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="400" y="40" width="200" height="50" as="geometry" />
+        </mxCell>
+        
+        <!-- TIER 2: Frontend Container -->
+        <mxCell id="frontend" value="Frontend (React + Vite)" style="swimlane;startSize=30;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="100" y="120" width="800" height="100" as="geometry" />
+        </mxCell>
+        
+        <!-- Frontend Pages -->
+        <mxCell id="orderpage" value="OrderPage" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11" vertex="1" parent="frontend">
+          <mxGeometry x="40" y="40" width="140" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="votepage" value="VotePage" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11" vertex="1" parent="frontend">
+          <mxGeometry x="200" y="40" width="140" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="adminpage" value="AdminPage" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11" vertex="1" parent="frontend">
+          <mxGeometry x="360" y="40" width="140" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="statpage" value="StatsPage" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11" vertex="1" parent="frontend">
+          <mxGeometry x="520" y="40" width="140" height="50" as="geometry" />
+        </mxCell>
+        
+        <!-- TIER 3: Backend Container -->
+        <mxCell id="backend" value="Backend (Go + Gin)" style="swimlane;startSize=30;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=12;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="100" y="260" width="800" height="120" as="geometry" />
+        </mxCell>
+        
+        <!-- Backend Handlers -->
+        <mxCell id="menuh" value="MenuHandler" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10" vertex="1" parent="backend">
+          <mxGeometry x="20" y="40" width="100" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="orderh" value="OrderHandler" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10" vertex="1" parent="backend">
+          <mxGeometry x="140" y="40" width="100" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="voteh" value="VoteHandler" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10" vertex="1" parent="backend">
+          <mxGeometry x="260" y="40" width="100" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="personnelh" value="PersonnelHandler" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10" vertex="1" parent="backend">
+          <mxGeometry x="380" y="40" width="120" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="adminh" value="AdminHandler" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10" vertex="1" parent="backend">
+          <mxGeometry x="520" y="40" width="120" height="70" as="geometry" />
+        </mxCell>
+        
+        <!-- TIER 4: Database -->
+        <mxCell id="database" value="SQLite DB&#xa;(ordering.db)" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="400" y="440" width="150" height="80" as="geometry" />
+        </mxCell>
+        
+        <!-- Middleware Box -->
+        <mxCell id="jwt" value="JWT Auth&#xa;Middleware" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10" vertex="1" parent="1">
+          <mxGeometry x="700" y="280" width="100" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="cors" value="CORS&#xa;Middleware" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10" vertex="1" parent="1">
+          <mxGeometry x="820" y="280" width="80" height="60" as="geometry" />
+        </mxCell>
+        
+        <!-- Connectors -->
+        <!-- Client to Frontend -->
+        <mxCell id="c1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#6c8ebf;strokeWidth=2" edge="1" parent="1" source="client" target="frontend">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="500" y="90" as="sourcePoint" />
+          </mxGeometry>
+        </mxCell>
+        
+        <!-- Frontend to Backend -->
+        <mxCell id="c2" value="HTTP/REST&#xa;:8088" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#d79b00;strokeWidth=2;labelBackgroundColor=#ffffff" edge="1" parent="1" source="frontend" target="backend">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        
+        <!-- Backend to Database -->
+        <mxCell id="c3" value="GORM" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#82b366;strokeWidth=2;labelBackgroundColor=#ffffff" edge="1" parent="1" source="backend" target="database">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="450" y="380" as="sourcePoint" />
+          </mxGeometry>
+        </mxCell>
+        
+        <!-- JWT to AdminHandler -->
+        <mxCell id="c4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#9673a6;dashed=1" edge="1" parent="1" source="jwt" target="adminh">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        
+        <!-- CORS to Backend -->
+        <mxCell id="c5" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#d6b656;dashed=1" edge="1" parent="1" source="cors" target="backend">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="860" y="260" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

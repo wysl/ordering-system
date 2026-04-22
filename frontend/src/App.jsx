@@ -46,6 +46,7 @@ export default function App() {
           <Route path="/admin/people" element={<AdminPage defaultTab="people" />} />
           <Route path="/admin" element={<AdminPage defaultTab="order" />} />
           <Route path="/admin/vote" element={<AdminPage defaultTab="vote" />} />
+          <Route path="/admin/stats" element={<AdminPage defaultTab="stats" />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>

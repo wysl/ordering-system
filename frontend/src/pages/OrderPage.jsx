@@ -115,6 +115,7 @@ export default function OrderPage({ defaultTab = 'order' }) {
   const [success, setSuccess] = useState(false)
   const [successMsg, setSuccessMsg] = useState('')
   const [error, setError] = useState('')
+  const [lastSubmitTime, setLastSubmitTime] = useState('')
 
   const isOrderMode = !!homeState.order
   const isVoteMode = !!homeState.vote
@@ -195,6 +196,7 @@ export default function OrderPage({ defaultTab = 'order' }) {
         })
         const spicyLabel = spicyInfo && dishSpicyLevel > 0 ? `（${spicyLevelLabels[dishSpicyLevel]}）` : ''
         setSuccessMsg(`${selectedPerson} 已完成本次点餐：${selectedDish?.name || ''}${spicyLabel}${remark.trim() ? `；备注：${remark.trim()}` : ''}`)
+        setLastSubmitTime(new Date().toLocaleString())
         setSuccess(true)
       } catch (e) {
         setError(e.response?.data?.error || '提交订单失败')
@@ -211,6 +213,7 @@ export default function OrderPage({ defaultTab = 'order' }) {
       try {
         await castVote({ vote_session_id: activeVote.id, person: selectedPerson.trim(), pizza_id: Number(selectedPizzaId) })
         setSuccessMsg(`${selectedPerson} 已完成本次投票：${selectedPizza?.name || ''}`)
+        setLastSubmitTime(new Date().toLocaleString())
         setSuccess(true)
       } catch (e) {
         setError(e.response?.data?.error || '投票失败')
@@ -240,6 +243,8 @@ export default function OrderPage({ defaultTab = 'order' }) {
               <div>姓名：<span className="font-semibold text-[#37352F]">{selectedPerson}</span></div>
               <div>当前活动：<span className="font-semibold text-[#37352F]">{homeState.title || (showingVoteTab ? '投票' : '点餐')}</span></div>
               <div>你的选择：<span className="font-semibold text-[#37352F]">{showingVoteTab ? selectedPizza?.name : selectedDish?.name}</span></div>
+              <div>提交时间：<span className="font-semibold text-[#37352F]">{lastSubmitTime || '刚刚'}</span></div>
+              <div>提交类型：<span className="font-semibold text-[#37352F]">{showingVoteTab ? '投票提交' : '点餐提交'}</span></div>
               {showingOrderTab && remark.trim() && <div>备注：<span className="font-semibold text-[#37352F]">{remark.trim()}</span></div>}
             </div>
             <button
@@ -262,7 +267,11 @@ export default function OrderPage({ defaultTab = 'order' }) {
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex-1 min-w-0">
             <div className="text-sm text-[#787774] mb-2">当前活动</div>
-            <h1 className="text-2xl font-bold text-[#37352F] mb-3">{homeState.title || '无'}</h1>
+            <h1 className="text-2xl font-bold text-[#37352F] mb-3">
+              {showingOrderTab
+                ? (isOrderMode ? homeState.order?.title : '当前未有点餐活动')
+                : (isVoteMode ? homeState.vote?.title : '当前未有投票活动')}
+            </h1>
             <p className="text-[#787774] max-w-xl">请选择姓名后完成当前活动。本页会根据后台状态显示当前可执行的流程。</p>
             {homeState.order?.deadline_at && showingOrderTab && (
               <p className="mt-3 text-sm text-amber-600">⏰ 截止时间：{new Date(homeState.order.deadline_at).toLocaleString()}</p>
@@ -448,21 +457,31 @@ export default function OrderPage({ defaultTab = 'order' }) {
 
       {/* Submit Bar */}
       {canOperate && (
-        <section className="sticky bottom-4 z-10">
-          <div className={`bg-white border rounded-lg p-4 flex flex-col md:flex-row gap-4 md:items-center md:justify-between transition-all duration-300 ${styles.borderDefault}`}>
-            <div className="text-sm text-[#787774]">
-              {selectedPerson ? <>当前操作人：<span className="font-semibold text-[#37352F]">{selectedPerson}</span></> : '请先选择姓名'}
-              {showingOrderTab && selectedDish && <> · 菜品：<span className="font-semibold text-[#37352F]">{selectedDish.name}</span></>}
-              {showingVoteTab && selectedPizza && <> · 选项：<span className="font-semibold text-[#37352F]">{selectedPizza.name}</span></>}
+        <section className="sticky bottom-4 z-10 space-y-3">
+          <div className={`bg-white border rounded-lg p-4 transition-all duration-300 ${styles.borderDefault}`}>
+            <div className="grid gap-3 md:grid-cols-4 text-sm">
+              <div><div className="text-[#9B9A97]">当前操作人</div><div className="font-semibold text-[#37352F]">{selectedPerson || '未选择'}</div></div>
+              <div><div className="text-[#9B9A97]">当前选择</div><div className="font-semibold text-[#37352F]">{showingVoteTab ? (selectedPizza?.name || '未选择') : (selectedDish?.name || '未选择')}</div></div>
+              <div><div className="text-[#9B9A97]">辣度 / 备注</div><div className="font-semibold text-[#37352F]">{showingOrderTab ? `${selectedDish && selectedSpicy[selectedDishId] ? spicyLevelLabels[selectedSpicy[selectedDishId]] : '默认'}${remark.trim() ? ` · ${remark.trim()}` : ''}` : '—'}</div></div>
+              <div><div className="text-[#9B9A97]">提交状态</div><div className="font-semibold text-[#37352F]">{submitting ? '提交中...' : selectedPerson ? '待确认提交' : '请选择姓名'}</div></div>
             </div>
-            <button
-              onClick={handleSubmit}
-              disabled={submitting || (!selectedDishId && !selectedPizzaId)}
-              className={`w-full md:w-auto min-w-[180px] px-6 py-3 text-white font-medium rounded-md disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-300 ${styles.accentBg} ${styles.accentHover}`}
-            >
-              {submitting ? '提交中...' : showingVoteTab ? '确认投票' : selectedDish ? '确认点餐' : '请选择后提交'}
-            </button>
           </div>
+          <section className="sticky bottom-4 z-10">
+            <div className={`bg-white border rounded-lg p-4 flex flex-col md:flex-row gap-4 md:items-center md:justify-between transition-all duration-300 ${styles.borderDefault}`}>
+              <div className="text-sm text-[#787774]">
+                {selectedPerson ? <>当前操作人：<span className="font-semibold text-[#37352F]">{selectedPerson}</span></> : '请先选择姓名'}
+                {showingOrderTab && selectedDish && <> · 菜品：<span className="font-semibold text-[#37352F]">{selectedDish.name}</span></>}
+                {showingVoteTab && selectedPizza && <> · 选项：<span className="font-semibold text-[#37352F]">{selectedPizza.name}</span></>}
+              </div>
+              <button
+                onClick={handleSubmit}
+                disabled={submitting || (!selectedDishId && !selectedPizzaId)}
+                className={`w-full md:w-auto min-w-[180px] px-6 py-3 text-white font-medium rounded-md disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-300 ${styles.accentBg} ${styles.accentHover}`}
+              >
+                {submitting ? '提交中...' : showingVoteTab ? '确认投票' : selectedDish ? '确认点餐' : '请选择后提交'}
+              </button>
+            </div>
+          </section>
         </section>
       )}
       </div>

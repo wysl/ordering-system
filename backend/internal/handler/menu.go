@@ -168,14 +168,18 @@ func isMenuHeaderRow(row []string) bool {
 	if len(row) > 1 {
 		second = normalizeMenuHeaderCell(row[1])
 	}
+	// A1 必须是表头关键词
 	switch first {
 	case "餐品", "餐品名", "店名", "菜品", "菜名", "名称":
-		return true
+		// 表头关键词 + B1包含辣度 = 表头行
+		return second != "" && strings.Contains(second, "辣度")
 	}
+	// A1 包含表头关键词
 	if strings.Contains(first, "餐品") || strings.Contains(first, "菜品") || strings.Contains(first, "菜名") {
-		return true
+		return second != "" && strings.Contains(second, "辣度")
 	}
-	return second != "" && strings.Contains(second, "辣度")
+	// 其他情况都不是表头行
+	return false
 }
 
 func isMenuTitleRow(row []string) bool {
@@ -185,16 +189,19 @@ func isMenuTitleRow(row []string) bool {
 	if strings.TrimSpace(row[0]) == "" {
 		return false
 	}
+	// 单列直接视为标题
 	if len(row) == 1 {
 		return true
 	}
-	if strings.TrimSpace(row[1]) != "" {
-		return false
+	// B1 为空，视为标题行
+	if strings.TrimSpace(row[1]) == "" {
+		return true
 	}
-	for _, cell := range row[2:] {
-		if strings.TrimSpace(cell) != "" {
-			return true
-		}
+	// B1 包含“辣度”但只是说明性文字（如“可选辣度”），视为标题行
+	// 这种情况常见：A1=店名, B1=辣度说明
+	b1 := strings.TrimSpace(row[1])
+	if strings.Contains(b1, "辣度") {
+		return true
 	}
 	return false
 }

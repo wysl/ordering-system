@@ -20,6 +20,7 @@ func main() {
 
 	if err := db.AutoMigrate(
 		&model.ActivityRound{},
+		&model.ActivityLog{},
 		&model.Menu{},
 		&model.Order{},
 		&model.OrderItem{},
@@ -77,6 +78,20 @@ func main() {
 			admin.POST("/vote", voteH.CreateVoteSession)
 			admin.DELETE("/vote/:id", voteH.DeleteVoteSession)
 			admin.GET("/votes", voteH.ListVoteSessions)
+			admin.POST("/persons/bulk-excuse", adminH.BulkExcuse)
+			admin.GET("/persons/excused", adminH.ListExcused)
+			admin.GET("/stream", adminH.StreamStatus)
+			admin.GET("/stats", adminH.GetStats)
+			admin.GET("/stats/:month/shops", adminH.GetStatsMonthShops)
+			admin.GET("/stats/:month/dishes", adminH.GetStatsMonthDishes)
+			admin.GET("/backup", adminH.BackupDB)
+			admin.POST("/restore", adminH.RestoreDB)
+			admin.GET("/logs", adminH.ListActivityLogs)
+			admin.GET("/rounds/trash", adminH.ListTrashRounds)
+			admin.POST("/rounds/:id/restore", adminH.RestoreRound)
+			admin.DELETE("/rounds/:id/purge", adminH.PurgeRound)
+			admin.POST("/rounds/trash/empty", adminH.EmptyTrash)
+			admin.GET("/rounds/export/batch.xlsx", adminH.ExportRoundsBatchXLSX)
 		}
 	}
 

@@ -1,11 +1,17 @@
 package handler
 
 import (
+	"archive/zip"
+	"bytes"
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
+	"io"
 	"math"
+	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,6 +29,19 @@ import (
 
 type AdminHandler struct {
 	DB *gorm.DB
+}
+
+type roundListItem struct {
+	model.ActivityRound
+	Count int `json:"count"`
+}
+
+type roundListResponse struct {
+	Items      []roundListItem `json:"items"`
+	Page       int             `json:"page"`
+	PageSize   int             `json:"page_size"`
+	Total      int64           `json:"total"`
+	TotalPages int             `json:"total_pages"`
 }
 
 func contentDispositionAttachment(filename string) string {
@@ -72,7 +91,13 @@ func (h *AdminHandler) ListOrders(c *gin.Context) {
 func (h *AdminHandler) GetParticipationStatus(c *gin.Context) {
 	modeFilter := strings.TrimSpace(c.Query("mode"))
 	var persons []model.Person
-	h.DB.Order("name asc").Find(&persons)
+	if modeFilter == "order" {
+		h.DB.Where("order_excused = ?", false).Order("name asc").Find(&persons)
+	} else if modeFilter == "vote" {
+		h.DB.Where("vote_excused = ?", false).Order("name asc").Find(&persons)
+	} else {
+		h.DB.Order("name asc").Find(&persons)
+	}
 	var round model.ActivityRound
 	q := h.DB.Where("active = ?", true).Order("id desc")
 	if modeFilter != "" {
@@ -80,7 +105,7 @@ func (h *AdminHandler) GetParticipationStatus(c *gin.Context) {
 	}
 	err := q.First(&round).Error
 	if err == gorm.ErrRecordNotFound {
-		c.JSON(200, gin.H{"mode": "idle", "total_count": len(persons), "done_count": 0, "pending": namesFromPersons(persons)})
+		c.JSON(200, gin.H{"mode": "idle", "total_count": len(persons), "done_count": 0, "pending": namesFromPersons(persons), "summary": gin.H{"pending_count": len(persons), "completion_rate": 0}})
 		return
 	}
 	if err != nil {
@@ -107,7 +132,25 @@ func (h *AdminHandler) GetParticipationStatus(c *gin.Context) {
 			pending = append(pending, p.Name)
 		}
 	}
-	c.JSON(200, gin.H{"mode": round.Mode, "round_id": round.ID, "title": round.Title, "deadline_at": round.DeadlineAt, "total_count": len(persons), "done_count": len(doneSet), "pending": pending})
+	completionRate := 0
+	if len(persons) > 0 {
+		completionRate = int(math.Round(float64(len(doneSet)) * 100 / float64(len(persons))))
+	}
+	c.JSON(200, gin.H{
+		"mode":       round.Mode,
+		"round_id":   round.ID,
+		"title":      round.Title,
+		"deadline_at": round.DeadlineAt,
+		"total_count": len(persons),
+		"done_count": len(doneSet),
+		"pending":    pending,
+		"summary": gin.H{
+			"pending_count":    len(pending),
+			"completion_rate": completionRate,
+			"done_count":      len(doneSet),
+			"total_count":     len(persons),
+		},
+	})
 }
 
 func namesFromPersons(persons []model.Person) []string {
@@ -142,58 +185,89 @@ func (h *AdminHandler) DeleteRound(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "无效轮次ID"})
 		return
 	}
+	previewOnly := c.Query("preview") == "1"
 	var round model.ActivityRound
 	if err := h.DB.First(&round, id).Error; err != nil {
 		c.JSON(404, gin.H{"error": "轮次不存在"})
 		return
 	}
-	_ = h.DB.Transaction(func(tx *gorm.DB) error {
-		if round.Mode == "order" {
-			var orders []model.Order
-			tx.Where("round_id = ?", round.ID).Find(&orders)
-			for _, o := range orders {
-				tx.Where("order_id = ?", o.ID).Delete(&model.OrderItem{})
-			}
-			tx.Where("round_id = ?", round.ID).Delete(&model.Order{})
-			tx.Where("round_id = ?", round.ID).Delete(&model.Menu{})
-		} else {
-			var sessions []model.VoteSession
-			tx.Where("round_id = ?", round.ID).Find(&sessions)
-			for _, s := range sessions {
-				tx.Where("vote_session_id = ?", s.ID).Delete(&model.Vote{})
-				tx.Where("vote_session_id = ?", s.ID).Delete(&model.VotePizza{})
-			}
-			tx.Where("round_id = ?", round.ID).Delete(&model.VoteSession{})
-		}
-		return tx.Delete(&model.ActivityRound{}, round.ID).Error
-	})
-	c.JSON(200, gin.H{"deleted": true})
+	impact := gin.H{"orders": 0, "order_items": 0, "menus": 0, "vote_sessions": 0, "votes": 0, "vote_pizzas": 0}
+	if round.Mode == "order" {
+		var ordersCount int64
+		var orderItemsCount int64
+		var menusCount int64
+		h.DB.Model(&model.Order{}).Where("round_id = ?", round.ID).Count(&ordersCount)
+		h.DB.Model(&model.OrderItem{}).Joins("JOIN orders ON orders.id = order_items.order_id").Where("orders.round_id = ?", round.ID).Count(&orderItemsCount)
+		h.DB.Model(&model.Menu{}).Where("round_id = ?", round.ID).Count(&menusCount)
+		impact["orders"] = ordersCount
+		impact["order_items"] = orderItemsCount
+		impact["menus"] = menusCount
+	} else {
+		var sessionCount int64
+		var votesCount int64
+		var pizzasCount int64
+		h.DB.Model(&model.VoteSession{}).Where("round_id = ?", round.ID).Count(&sessionCount)
+		h.DB.Model(&model.Vote{}).Joins("JOIN vote_sessions ON vote_sessions.id = votes.vote_session_id").Where("vote_sessions.round_id = ?", round.ID).Count(&votesCount)
+		h.DB.Model(&model.VotePizza{}).Joins("JOIN vote_sessions ON vote_sessions.id = vote_pizzas.vote_session_id").Where("vote_sessions.round_id = ?", round.ID).Count(&pizzasCount)
+		impact["vote_sessions"] = sessionCount
+		impact["votes"] = votesCount
+		impact["vote_pizzas"] = pizzasCount
+	}
+	if previewOnly {
+		c.JSON(200, gin.H{"round": round, "impact": impact})
+		return
+	}
+	now := time.Now()
+	if err := h.DB.Model(&model.ActivityRound{}).Where("id = ?", round.ID).Updates(map[string]any{"deleted_at": &now, "active": false}).Error; err != nil {
+		c.JSON(500, gin.H{"error": "删除轮次失败"})
+		return
+	}
+	h.DB.Create(&model.ActivityLog{Type: "round_deleted", Message: fmt.Sprintf("轮次 #%d 已移入回收站", round.ID), RoundID: round.ID})
+	c.JSON(200, gin.H{"deleted": true, "soft_deleted": true})
 }
 
 func (h *AdminHandler) ListRounds(c *gin.Context) {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "5"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 5
+	}
+	if pageSize > 50 {
+		pageSize = 50
+	}
+	keyword := strings.TrimSpace(c.Query("keyword"))
+	date := strings.TrimSpace(c.Query("date"))
+	q := h.DB.Model(&model.ActivityRound{}).Where("deleted_at IS NULL")
+	if keyword != "" {
+		like := "%" + keyword + "%"
+		q = q.Where("title LIKE ? OR CAST(id AS TEXT) LIKE ?", like, like)
+	}
+	if date != "" {
+		q = q.Where("date(created_at) = ?", date)
+	}
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		c.JSON(500, gin.H{"error": "查询历史轮次失败"})
+		return
+	}
 	var rounds []model.ActivityRound
-	h.DB.Order("id desc").Limit(20).Find(&rounds)
-	type roundItem struct {
-		ID         uint       `json:"id"`
-		Mode       string     `json:"mode"`
-		Title      string     `json:"title"`
-		Active     bool       `json:"active"`
-		CreatedAt  time.Time  `json:"created_at"`
-		ClosedAt   *time.Time `json:"closed_at"`
-		DeadlineAt *time.Time `json:"deadline_at"`
-		Count      int64      `json:"count"`
+	if err := q.Order("id desc").Offset((page-1)*pageSize).Limit(pageSize).Find(&rounds).Error; err != nil {
+		c.JSON(500, gin.H{"error": "查询历史轮次失败"})
+		return
 	}
-	result := make([]roundItem, 0, len(rounds))
-	for _, r := range rounds {
-		var count int64
-		if r.Mode == "order" {
-			h.DB.Model(&model.Order{}).Where("round_id = ?", r.ID).Count(&count)
-		} else if r.Mode == "vote" {
-			h.DB.Raw(`SELECT COUNT(DISTINCT votes.person) FROM votes JOIN vote_sessions ON vote_sessions.id = votes.vote_session_id WHERE vote_sessions.round_id = ?`, r.ID).Scan(&count)
-		}
-		result = append(result, roundItem{ID: r.ID, Mode: r.Mode, Title: r.Title, Active: r.Active, CreatedAt: r.CreatedAt, ClosedAt: r.ClosedAt, DeadlineAt: r.DeadlineAt, Count: count})
+	result, err := loadRoundSummaries(h.DB, rounds)
+	if err != nil {
+		c.JSON(500, gin.H{"error": "统计历史轮次失败"})
+		return
 	}
-	c.JSON(200, result)
+	items := make([]roundListItem, 0, len(result))
+	for _, item := range result {
+		items = append(items, roundListItem{ActivityRound: model.ActivityRound{ID: item.ID, Mode: item.Mode, Title: item.Title, Active: item.Active, CreatedAt: item.CreatedAt, ClosedAt: item.ClosedAt, DeadlineAt: item.DeadlineAt}, Count: int(item.Count)})
+	}
+	c.JSON(200, roundListResponse{Items: items, Page: page, PageSize: pageSize, Total: total, TotalPages: int(math.Ceil(float64(total) / float64(pageSize)))})
 }
 
 func (h *AdminHandler) GetRoundDetail(c *gin.Context) {
@@ -403,30 +477,129 @@ func (h *AdminHandler) ExportRoundXLSX(c *gin.Context) {
 	}
 	var orders []model.Order
 	h.DB.Where("round_id = ?", round.ID).Preload("Items").Preload("Items.Menu").Order("created_at desc").Find(&orders)
+
+	// Get excused persons
+	var excusedPersons []model.Person
+	h.DB.Where("excused = ?", true).Order("name asc").Find(&excusedPersons)
+
 	f := excelize.NewFile()
-	sheet := "订单明细"
-	f.SetSheetName("Sheet1", sheet)
-	headers := []string{"姓名", "菜品", "数量", "辣度", "备注", "提交时间"}
-	for i, htext := range headers {
-		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
-		f.SetCellValue(sheet, cell, htext)
+	defer func() { _ = f.Close() }()
+
+	// ===== Sheet 1: 汇总 =====
+	summarySheet := "汇总"
+	f.SetSheetName("Sheet1", summarySheet)
+
+	f.SetCellValue(summarySheet, "A1", round.Title)
+	f.SetCellValue(summarySheet, "A2", "创建时间："+round.CreatedAt.Format("2006-01-02 15:04"))
+	if round.ClosedAt != nil {
+		f.SetCellValue(summarySheet, "A3", "结束时间："+round.ClosedAt.Format("2006-01-02 15:04"))
 	}
+
+	// Aggregate per-dish counts
+	type dishStats struct {
+		name          string
+		total         int
+		spicyBreakdown map[int]int
+	}
+	dishMap := make(map[string]*dishStats)
+	for _, order := range orders {
+		for _, item := range order.Items {
+			name := item.Menu.Name
+			if dishMap[name] == nil {
+				dishMap[name] = &dishStats{name: name, spicyBreakdown: make(map[int]int)}
+			}
+			dishMap[name].total += item.Quantity
+			dishMap[name].spicyBreakdown[item.SpicyLevel] += item.Quantity
+		}
+	}
+
+	dishes := make([]*dishStats, 0, len(dishMap))
+	for _, d := range dishMap {
+		dishes = append(dishes, d)
+	}
+	sort.Slice(dishes, func(i, j int) bool { return dishes[i].total > dishes[j].total })
+
 	spicyLabels := map[int]string{0: "不辣", 1: "微辣", 2: "中辣", 3: "重辣"}
+	summaryHeaderRow := 5
+	sumHeaders := []string{"菜品", "不辣", "微辣", "中辣", "重辣", "合计"}
+	boldStyle, _ := f.NewStyle(&excelize.Style{Font: &excelize.Font{Bold: true}})
+	for i, h := range sumHeaders {
+		cell, _ := excelize.CoordinatesToCellName(i+1, summaryHeaderRow)
+		f.SetCellValue(summarySheet, cell, h)
+		f.SetCellStyle(summarySheet, cell, cell, boldStyle)
+	}
+
+	for i, d := range dishes {
+		row := summaryHeaderRow + 1 + i
+		f.SetCellValue(summarySheet, fmt.Sprintf("A%d", row), d.name)
+		for level := 0; level <= 3; level++ {
+			col := level + 2
+			cell, _ := excelize.CoordinatesToCellName(col, row)
+			cnt := d.spicyBreakdown[level]
+			if cnt > 0 {
+				f.SetCellValue(summarySheet, cell, cnt)
+			} else {
+				f.SetCellValue(summarySheet, cell, "-")
+			}
+		}
+		f.SetCellValue(summarySheet, fmt.Sprintf("F%d", row), d.total)
+	}
+
+	// Add bar chart
+	if len(dishes) > 0 {
+		chartStart := summaryHeaderRow + 1
+		chartEnd := summaryHeaderRow + len(dishes)
+		catRange := fmt.Sprintf("%s!$A$%d:$A$%d", summarySheet, chartStart, chartEnd)
+		valRange := fmt.Sprintf("%s!$F$%d:$F$%d", summarySheet, chartStart, chartEnd)
+		_ = f.AddChart(summarySheet, "H5", &excelize.Chart{
+			Type:   excelize.Col,
+			Series: []excelize.ChartSeries{{Name: "数量", Categories: catRange, Values: valRange}},
+			Format: excelize.GraphicOptions{OffsetX: 10, OffsetY: 10},
+			Legend: excelize.ChartLegend{Position: "none"},
+			Title:  []excelize.RichTextRun{{Text: "菜品热度分布", Font: &excelize.Font{Bold: true}}},
+			PlotArea: excelize.ChartPlotArea{ShowCatName: true, ShowVal: true},
+		})
+	}
+
+	f.SetColWidth(summarySheet, "A", "A", 28)
+	f.SetColWidth(summarySheet, "B", "G", 12)
+
+	// ===== Sheet 2: 明细 =====
+	detailSheet := "明细"
+	f.NewSheet(detailSheet)
+	detailHeaders := []string{"姓名", "菜品", "数量", "辣度", "备注", "提交时间"}
+	for i, htext := range detailHeaders {
+		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
+		f.SetCellValue(detailSheet, cell, htext)
+		f.SetCellStyle(detailSheet, cell, cell, boldStyle)
+	}
 	row := 2
 	for _, order := range orders {
 		if len(order.Items) == 0 {
-			f.SetSheetRow(sheet, fmt.Sprintf("A%d", row), &[]any{order.Person, "", "", "", order.Remark, order.CreatedAt.Format("2006-01-02 15:04:05")})
+			f.SetSheetRow(detailSheet, fmt.Sprintf("A%d", row), &[]any{order.Person, "", "", "", order.Remark, order.CreatedAt.Format("2006-01-02 15:04:05")})
 			row++
 			continue
 		}
 		for _, item := range order.Items {
-			f.SetSheetRow(sheet, fmt.Sprintf("A%d", row), &[]any{order.Person, item.Menu.Name, item.Quantity, spicyLabels[item.SpicyLevel], order.Remark, order.CreatedAt.Format("2006-01-02 15:04:05")})
+			f.SetSheetRow(detailSheet, fmt.Sprintf("A%d", row), &[]any{order.Person, item.Menu.Name, item.Quantity, spicyLabels[item.SpicyLevel], order.Remark, order.CreatedAt.Format("2006-01-02 15:04:05")})
 			row++
 		}
 	}
-	f.SetColWidth(sheet, "A", "F", 18)
+	f.SetColWidth(detailSheet, "A", "F", 18)
+
+	// ===== Sheet 3: 请假记录 =====
+	excusedSheet := "请假记录"
+	f.NewSheet(excusedSheet)
+	f.SetCellValue(excusedSheet, "A1", "姓名")
+	f.SetCellStyle(excusedSheet, "A1", "A1", boldStyle)
+	for i, p := range excusedPersons {
+		f.SetCellValue(excusedSheet, fmt.Sprintf("A%d", i+2), p.Name)
+	}
+	f.SetColWidth(excusedSheet, "A", "A", 20)
+
+	filename := fmt.Sprintf("round_%d_export_%s.xlsx", round.ID, time.Now().Format("20060102"))
 	c.Header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="round_%d.xlsx"`, round.ID))
+	c.Header("Content-Disposition", contentDispositionAttachment(filename))
 	_ = f.Write(c.Writer)
 }
 
@@ -632,4 +805,431 @@ func (h *AdminHandler) ExportHTML(c *gin.Context) {
 	b.WriteString(`</div><script>function toggle(el){el.nextElementSibling.classList.toggle('open')}</script></body></html>`)
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	c.String(200, b.String())
+}
+
+// POST /api/admin/persons/bulk-excuse
+func (h *AdminHandler) BulkExcuse(c *gin.Context) {
+	var req struct {
+		Names  []string `json:"names"`
+		Action string   `json:"action"`
+		Mode   string   `json:"mode"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"error": "无效请求"})
+		return
+	}
+	if len(req.Names) == 0 {
+		c.JSON(400, gin.H{"error": "名单不能为空"})
+		return
+	}
+	excuse := req.Action == "excuse"
+	field := "order_excused"
+	if req.Mode == "vote" {
+		field = "vote_excused"
+	}
+	if err := h.DB.Model(&model.Person{}).Where("name IN ?", req.Names).Update(field, excuse).Error; err != nil {
+		c.JSON(500, gin.H{"error": "更新失败"})
+		return
+	}
+	c.JSON(200, gin.H{"updated": len(req.Names), "excused": excuse, "mode": req.Mode})
+}
+
+// GET /api/admin/persons/excused
+func (h *AdminHandler) ListExcused(c *gin.Context) {
+	mode := strings.TrimSpace(c.Query("mode"))
+	var persons []model.Person
+	if mode == "order" {
+		h.DB.Where("order_excused = ?", true).Order("name asc").Find(&persons)
+	} else if mode == "vote" {
+		h.DB.Where("vote_excused = ?", true).Order("name asc").Find(&persons)
+	} else {
+		h.DB.Where("order_excused = ? OR vote_excused = ?", true, true).Order("name asc").Find(&persons)
+	}
+	c.JSON(200, persons)
+}
+
+// GET /api/admin/stream — SSE endpoint for real-time participation status
+func (h *AdminHandler) StreamStatus(c *gin.Context) {
+	modeFilter := strings.TrimSpace(c.Query("mode"))
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("Access-Control-Allow-Origin", "*")
+	c.Header("X-Accel-Buffering", "no")
+
+	flush := func() {
+		if flusher, ok := c.Writer.(http.Flusher); ok {
+			flusher.Flush()
+		}
+	}
+
+	sendStatus := func() {
+		var persons []model.Person
+		h.DB.Where("excused = ?", false).Order("name asc").Find(&persons)
+
+		var round model.ActivityRound
+		q := h.DB.Where("active = ?", true).Order("id desc")
+		if modeFilter != "" {
+			q = q.Where("mode = ?", modeFilter)
+		}
+		err := q.First(&round).Error
+
+		doneSet := map[string]struct{}{}
+		if err == nil {
+			if round.Mode == "order" {
+				var names []string
+				h.DB.Raw("SELECT DISTINCT person FROM orders WHERE round_id = ?", round.ID).Scan(&names)
+				for _, n := range names {
+					doneSet[n] = struct{}{}
+				}
+			} else if round.Mode == "vote" {
+				var names []string
+				h.DB.Raw(`SELECT DISTINCT votes.person FROM votes JOIN vote_sessions ON vote_sessions.id = votes.vote_session_id WHERE vote_sessions.round_id = ?`, round.ID).Scan(&names)
+				for _, n := range names {
+					doneSet[n] = struct{}{}
+				}
+			}
+		}
+
+		pending := make([]string, 0)
+		for _, p := range persons {
+			if _, ok := doneSet[p.Name]; !ok {
+				pending = append(pending, p.Name)
+			}
+		}
+		completionRate := 0
+		if len(persons) > 0 {
+			completionRate = int(math.Round(float64(len(doneSet)) * 100 / float64(len(persons))))
+		}
+
+		mode := "idle"
+		if err == nil {
+			mode = round.Mode
+		}
+
+		payload := gin.H{
+			"mode":            mode,
+			"total_count":     len(persons),
+			"done_count":     len(doneSet),
+			"pending":         pending,
+			"completion_rate": completionRate,
+			"timestamp":       time.Now().Unix(),
+		}
+		if err == nil {
+			payload["round_id"] = round.ID
+			payload["title"] = round.Title
+			payload["deadline_at"] = round.DeadlineAt
+		}
+
+		data, _ := json.Marshal(payload)
+		c.Writer.Write([]byte("data: "))
+		c.Writer.Write(data)
+		c.Writer.Write([]byte("\n\n"))
+		flush()
+	}
+
+	// Send initial status immediately
+	sendStatus()
+
+	// Keep-alive tick
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	clientGone := c.Request.Context().Done()
+	for {
+		select {
+		case <-clientGone:
+			return
+		case <-ticker.C:
+			sendStatus()
+		}
+	}
+}
+
+// GET /api/admin/stats — aggregated statistics
+func (h *AdminHandler) GetStats(c *gin.Context) {
+	var totalRounds int64
+	h.DB.Model(&model.ActivityRound{}).Count(&totalRounds)
+
+	var totalOrders int64
+	h.DB.Model(&model.Order{}).Count(&totalOrders)
+
+	var totalPeople int64
+	h.DB.Model(&model.Person{}).Count(&totalPeople)
+
+	var excusedCount int64
+	h.DB.Model(&model.Person{}).Where("excused = ?", true).Count(&excusedCount)
+
+	// Participation rate
+	var avgParticipation float64
+	h.DB.Raw(`
+		SELECT AVG(
+			CASE
+				WHEN r.mode = 'order' THEN
+					CAST((SELECT COUNT(DISTINCT person) FROM orders WHERE round_id = r.id) AS REAL) /
+					NULLIF((SELECT COUNT(*) FROM persons WHERE excused = 0), 0) * 100
+				WHEN r.mode = 'vote' THEN
+					CAST((SELECT COUNT(DISTINCT votes.person) FROM votes JOIN vote_sessions vs ON vs.id = votes.vote_session_id WHERE vs.round_id = r.id) AS REAL) /
+					NULLIF((SELECT COUNT(*) FROM persons WHERE excused = 0), 0) * 100
+				ELSE 0
+			END
+		) FROM activity_rounds r WHERE r.active = 0
+	`).Scan(&avgParticipation)
+
+	// Available months (last 12 months with order rounds)
+	var availableMonths []struct {
+		Month string `json:"month"`
+	}
+	h.DB.Raw(`
+		SELECT DISTINCT strftime('%Y-%m', created_at) as month
+		FROM activity_rounds
+		WHERE created_at >= date('now', '-12 months') AND mode = 'order'
+		ORDER BY month DESC
+	`).Scan(&availableMonths)
+
+	c.JSON(200, gin.H{
+		"total_rounds":       totalRounds,
+		"total_orders":       totalOrders,
+		"total_people":       totalPeople,
+		"available_months":   availableMonths,
+		"participation_rate": int(math.Round(avgParticipation)),
+		"excused_count":      excusedCount,
+	})
+}
+
+// GET /api/admin/backup — stream SQLite DB as downloadable zip
+func (h *AdminHandler) BackupDB(c *gin.Context) {
+	dbPath := "ordering.db"
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		c.JSON(404, gin.H{"error": "数据库文件不存在"})
+		return
+	}
+
+	buf := new(bytes.Buffer)
+	w := zip.NewWriter(buf)
+
+	defer w.Close()
+
+	f, err := w.Create("ordering.db")
+	if err != nil {
+		c.JSON(500, gin.H{"error": "创建备份失败"})
+		return
+	}
+
+	src, err := os.Open(dbPath)
+	if err != nil {
+		c.JSON(500, gin.H{"error": "读取数据库失败"})
+		return
+	}
+	defer src.Close()
+
+	if _, err := io.Copy(f, src); err != nil {
+		c.JSON(500, gin.H{"error": "备份写入失败"})
+		return
+	}
+
+	if err := w.Close(); err != nil {
+		c.JSON(500, gin.H{"error": "压缩失败"})
+		return
+	}
+
+	timestamp := time.Now().Format("20060102_150405")
+	filename := fmt.Sprintf("ordering_backup_%s.db", timestamp)
+
+	c.Header("Content-Type", "application/zip")
+	c.Header("Content-Disposition", contentDispositionAttachment(filename))
+	c.Data(200, "application/zip", buf.Bytes())
+}
+
+func (h *AdminHandler) RestoreDB(c *gin.Context) {
+	var req struct {
+		Confirm bool `json:"confirm"`
+	}
+	if err := c.ShouldBindJSON(&req); err == nil {
+		if !req.Confirm {
+			c.JSON(400, gin.H{"error": "需要确认才能恢复数据库"})
+			return
+		}
+	} else {
+		// Try header-based confirmation
+		confirmHeader := c.GetHeader("X-Restore-Confirm")
+		if confirmHeader != "true" {
+			c.JSON(400, gin.H{"error": "需要确认才能恢复数据库，请设置 X-Restore-Confirm: true 或发送 {confirm: true} JSON body"})
+			return
+		}
+	}
+
+	file, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(400, gin.H{"error": "请上传数据库文件"})
+		return
+	}
+
+	if !strings.HasSuffix(file.Filename, ".db") && !strings.HasSuffix(file.Filename, ".sqlite") && !strings.HasSuffix(file.Filename, ".sqlite3") {
+		c.JSON(400, gin.H{"error": "仅支持 .db / .sqlite / .sqlite3 文件"})
+		return
+	}
+
+	// Verify it's a valid SQLite file by reading header
+	f, err := file.Open()
+	if err != nil {
+		c.JSON(500, gin.H{"error": "无法读取上传文件"})
+		return
+	}
+	header := make([]byte, 16)
+	if _, err := f.Read(header); err != nil {
+		f.Close()
+		c.JSON(500, gin.H{"error": "文件读取失败"})
+		return
+	}
+	f.Close()
+
+	// SQLite magic header
+	if string(header[:16]) != "SQLite format 3\x00" {
+		c.JSON(400, gin.H{"error": "无效的 SQLite 数据库文件"})
+		return
+	}
+
+	// Close existing connections by replacing the DB file
+	dbPath := "ordering.db"
+	backupPath := dbPath + ".bak." + time.Now().Format("20060102_150405")
+	if _, err := os.Stat(dbPath); err == nil {
+		os.Rename(dbPath, backupPath)
+	}
+
+	// Save uploaded file
+	if err := c.SaveUploadedFile(file, dbPath); err != nil {
+		// Try to restore backup
+		if _, err2 := os.Stat(backupPath); err2 == nil {
+			os.Rename(backupPath, dbPath)
+		}
+		c.JSON(500, gin.H{"error": "文件保存失败: " + err.Error()})
+		return
+	}
+
+	c.JSON(200, gin.H{
+		"restored":  true,
+		"backup":     filepath.Base(backupPath),
+		"notice":     "数据库已恢复，请刷新页面或重启服务以加载新数据",
+	})
+}
+
+// Helper: JSON marshal without import cycle
+func jsonMarshal(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	err := encoder.Encode(v)
+	return buf.Bytes(), err
+}
+
+// GET /api/admin/stats/:month/shops — shops (round titles) for a specific month
+func (h *AdminHandler) GetStatsMonthShops(c *gin.Context) {
+	month := c.Param("month")
+	if len(month) != 7 || month[4] != '-' {
+		c.JSON(400, gin.H{"error": "月份格式应为 YYYY-MM"})
+		return
+	}
+
+	var shops []struct {
+		RoundID   uint   `json:"round_id"`
+		Title     string `json:"title"`
+		OrderCount int    `json:"order_count"`
+		CreatedAt string `json:"created_at"`
+	}
+
+	// Query order rounds for the month
+	var rounds []model.ActivityRound
+	h.DB.Where("mode = ? AND strftime('%Y-%m', created_at) = ?", "order", month).Order("id asc").Find(&rounds)
+
+	for _, r := range rounds {
+		var count int64
+		h.DB.Model(&model.Order{}).Where("round_id = ?", r.ID).Count(&count)
+		shops = append(shops, struct {
+			RoundID   uint   `json:"round_id"`
+			Title     string `json:"title"`
+			OrderCount int    `json:"order_count"`
+			CreatedAt string `json:"created_at"`
+		}{
+			RoundID:   r.ID,
+			Title:     r.Title,
+			OrderCount: int(count),
+			CreatedAt: r.CreatedAt.Format("2006-01-02 15:04"),
+		})
+	}
+
+	c.JSON(200, gin.H{"month": month, "shops": shops})
+}
+
+// GET /api/admin/stats/:month/dishes — top 10 dishes for a specific month
+func (h *AdminHandler) GetStatsMonthDishes(c *gin.Context) {
+	month := c.Param("month")
+	if len(month) != 7 || month[4] != '-' {
+		c.JSON(400, gin.H{"error": "月份格式应为 YYYY-MM"})
+		return
+	}
+
+	var topDishes []struct {
+		Name  string `json:"name"`
+		Count int    `json:"count"`
+	}
+
+	// Query dishes ordered in the month
+	start := month + "-01"
+	end := month + "-31"
+
+	// Find round IDs for the month
+	var roundIDs []uint
+	h.DB.Model(&model.ActivityRound{}).
+		Where("mode = ? AND date(created_at) >= ? AND date(created_at) <= ?", "order", start, end).
+		Pluck("id", &roundIDs)
+
+	if len(roundIDs) == 0 {
+		c.JSON(200, gin.H{"month": month, "dishes": []any{}})
+		return
+	}
+
+	// Query order items for these rounds
+	var orderIDs []uint
+	h.DB.Model(&model.Order{}).Where("round_id IN ?", roundIDs).Pluck("id", &orderIDs)
+
+	if len(orderIDs) == 0 {
+		c.JSON(200, gin.H{"month": month, "dishes": []any{}})
+		return
+	}
+
+	// Sum quantities by menu name
+	var menuIDs []uint
+	h.DB.Model(&model.OrderItem{}).Where("order_id IN ?", orderIDs).Pluck("menu_id", &menuIDs)
+
+	// Get menu names and quantities
+	var menuQuantities []struct {
+		MenuID    uint `json:"menu_id"`
+		Quantity  int  `json:"quantity"`
+	}
+	h.DB.Model(&model.OrderItem{}).Select("menu_id, SUM(quantity) as quantity").Where("order_id IN ?", orderIDs).Group("menu_id").Find(&menuQuantities)
+
+	// Get menu names
+	for _, mq := range menuQuantities {
+		var menu model.Menu
+		if err := h.DB.First(&menu, mq.MenuID).Error; err == nil {
+			topDishes = append(topDishes, struct {
+				Name  string `json:"name"`
+				Count int    `json:"count"`
+			}{Name: menu.Name, Count: mq.Quantity})
+		}
+	}
+
+	// Sort by count descending
+	sort.Slice(topDishes, func(i, j int) bool {
+		return topDishes[i].Count > topDishes[j].Count
+	})
+
+	// Limit to top 10
+	if len(topDishes) > 10 {
+		topDishes = topDishes[:10]
+	}
+
+	c.JSON(200, gin.H{"month": month, "dishes": topDishes})
 }

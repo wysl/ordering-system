@@ -1,54 +1,109 @@
-# 任务简报 - Ordering System Backend
+# Ordering System Backend
 
-## 任务信息
-- **名称**: 点餐系统后端
-- **类型**: Go 后端开发 (Gin + SQLite + GORM)
-- **时间**: 2026-04-07
-- **交付物路径**: `/root/.openclaw/workspace-dev/tasks/ordering-system/backend/`
+点餐系统后端服务，基于 Go + Gin + SQLite + GORM + JWT 构建。
 
-## 交付物清单
-| 文件 | 用途 |
-|------|------|
-| `main.go` | 入口文件，路由注册，启动服务 |
-| `internal/model/model.go` | 数据模型：Menu, Order, OrderItem |
-| `internal/middleware/auth.go` | JWT 认证中间件 |
-| `internal/middleware/cors.go` | CORS 中间件 (允许 localhost:5173) |
-| `internal/handler/menu.go` | 菜品相关接口处理 |
-| `internal/handler/order.go` | 订单相关接口处理 |
-| `internal/handler/admin.go` | 管理端接口处理 (登录/导出/CSV解析) |
-| `go.mod` / `go.sum` | Go 模块依赖 |
-| `ordering-backend` | 编译好的二进制文件 |
+## 技术栈
 
-## API 接口
-- `GET /api/menu` — 公开菜品列表
-- `POST /api/order` — 提交订单 `{person, items: [{menu_id, quantity}]}`
-- `POST /api/admin/login` — 登录，密码固定 `admin123`，返回 JWT token
-- `POST /api/admin/menu/import` — CSV 导入菜品 (multipart file)
-- `GET /api/admin/menu` — 管理端菜品列表
-- `DELETE /api/admin/menu/:id` — 删除菜品（已关联订单则拒绝）
-- `GET /api/admin/orders` — 获取所有订单（含 items 和 menu 详情）
-- `GET /api/admin/export` — 导出 HTML 汇总（餐品名+总数+展开查看点餐人）
+| 依赖 | 版本 | 用途 |
+|------|------|------|
+| Go | 1.25.7 | 运行环境 |
+| Gin | 1.12.0 | Web 框架 |
+| GORM | 1.31.1 | ORM |
+| SQLite | - | 数据库 |
+| golang-jwt | 5.3.1 | JWT 认证 |
+| excelize | 2.10.1 | Excel 导入导出 |
 
-## 技术实现要点
-- **CORS**: 允许 `http://localhost:5173`，支持 OPTIONS 预检
-- **JWT**: 使用 `golang-jwt/jwt/v5`，token 有效期无限制（简单场景）
-- **数据库**: SQLite + GORM 自动迁移，外键关联自动预加载
-- **HTML 导出**: 生成简洁响应式 HTML，点击展开详情，红色数量徽章
-- **CSV 解析**: 第一行为 header 自动跳过，辣度为空默认为 0
-- **端口**: 8088，路由前缀 `/api`
+## 项目结构
 
-## 使用说明
-```bash
-cd /root/.openclaw/workspace-dev/tasks/ordering-system/backend/
-./ordering-backend
-# 服务运行在 :8088
+```
+backend/
+├── main.go                    # 入口文件，路由注册
+├── ordering.db                # SQLite 数据库文件
+├── ordering-backend           # 编译后的二进制文件
+├── go.mod / go.sum            # Go 模块依赖
+└── internal/
+    ├── model/model.go         # 数据模型定义
+    ├── middleware/
+    │   ├── cors.go            # CORS 中间件
+    │   └── jwt.go             # JWT 认证中间件
+    └── handler/
+        ├── menu.go            # 菜品导入/删除
+        ├── order.go           # 点餐/投票提交
+        ├── admin.go           # 管理端 API
+        ├── vote.go            # 投票相关
+        ├── personnel.go       # 人员管理
+        └── rounds.go          # 历史轮次管理
 ```
 
-## 操作记录与自检
-- [x] go build 成功
-- [x] 所有 API 路由已实现
-- [x] CORS 配置正确
-- [x] JWT 中间件保护 admin 接口
-- [x] CSV 解析含 header 跳过逻辑
-- [x] HTML 导出含展开/折叠功能
-- [x] 菜品删除检查订单关联
+## API 接口
+
+### 公开接口
+
+| 路径 | 方法 | 说明 |
+|------|------|------|
+| `/api/home-state` | GET | 首页状态（活动类型、标题等） |
+| `/api/menu` | GET | 当前菜品列表 |
+| `/api/personnel` | GET | 人员名单 |
+| `/api/order` | POST | 提交点餐 |
+| `/api/order/mine` | GET | 查询我的订单 |
+| `/api/votes` | GET | 公开投票列表 |
+| `/api/vote` | POST | 提交投票 |
+| `/api/vote/:id/result` | GET | 投票结果 |
+
+### 管理接口（需 JWT 认证）
+
+| 路径 | 方法 | 说明 |
+|------|------|------|
+| `/api/admin/login` | POST | 登录（密码固定 `admin123456`） |
+| `/api/admin/menu/import` | POST | 导入菜品 CSV/XLSX |
+| `/api/admin/menu` | GET/DELETE | 菜品管理 |
+| `/api/admin/orders` | GET | 订单列表 |
+| `/api/admin/rounds` | GET | 历史轮次（分页/搜索） |
+| `/api/admin/rounds/:id/detail` | GET | 轮次详情 |
+| `/api/admin/rounds/:id/export` | GET | 导出 HTML |
+| `/api/admin/rounds/:id/export.xlsx` | GET | 导出 Excel |
+| `/api/admin/stats` | GET | 统计总览 |
+| `/api/admin/stats/:month/shops` | GET | 指定月份店铺列表 |
+| `/api/admin/stats/:month/dishes` | GET | 指定月份热门菜品 Top10 |
+| `/api/admin/backup` | GET | 数据库备份 |
+| `/api/admin/restore` | POST | 数据库恢复 |
+| `/api/admin/logs` | GET | 操作日志 |
+
+## 本地开发
+
+```bash
+# 编译
+go build -o ordering-backend
+
+# 运行（端口 8088）
+./ordering-backend
+
+# 测试
+go test ./internal/handler/...
+```
+
+## 配置
+
+- **端口**: `8088`（硬编码）
+- **数据库**: `ordering.db`（自动创建/迁移）
+- **JWT Secret**: 硬编码 `your-secret-key`
+- **CORS**: 允许所有来源（可按需收紧）
+
+## 更新日志
+
+### 2026-04-22
+- 新增 `/api/admin/stats/:month/shops` — 月份店铺列表
+- 新增 `/api/admin/stats/:month/dishes` — 月份热门菜品 Top10
+- 简化 `/api/admin/stats` 返回结构
+
+### 2026-04-14
+- 新增历史轮次分页/搜索/筛选
+- 新增数据库备份/恢复
+- 新增回收站/软删除
+- 新增操作日志
+
+### 2026-04-07
+- 初始版本
+- CSV/XLSX 菜品导入
+- 点餐/投票提交
+- HTML 导出

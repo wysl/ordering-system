@@ -8,11 +8,20 @@ type ActivityRound struct {
 	Title       string     `json:"title"`
 	DeadlineAt  *time.Time `json:"deadline_at"`
 	Active      bool       `gorm:"not null;default:false;index" json:"active"`
+	DeletedAt   *time.Time `gorm:"index" json:"deleted_at,omitempty"`
 	CreatedAt   time.Time  `json:"created_at"`
 	ClosedAt    *time.Time `json:"closed_at"`
 	Menus        []Menu        `gorm:"foreignKey:RoundID" json:"menus,omitempty"`
 	Orders       []Order       `gorm:"foreignKey:RoundID" json:"orders,omitempty"`
 	VoteSessions []VoteSession `gorm:"foreignKey:RoundID" json:"vote_sessions,omitempty"`
+}
+
+type ActivityLog struct {
+	ID        uint      `gorm:"primarykey" json:"id"`
+	Type      string    `gorm:"index" json:"type"`
+	Message   string    `json:"message"`
+	RoundID   uint      `gorm:"index" json:"round_id"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type Menu struct {
@@ -24,8 +33,10 @@ type Menu struct {
 }
 
 type Person struct {
-	ID   uint   `gorm:"primarykey" json:"id"`
-	Name string `gorm:"uniqueIndex;not null" json:"name"`
+	ID          uint   `gorm:"primarykey" json:"id"`
+	Name        string `gorm:"uniqueIndex;not null" json:"name"`
+	OrderExcused bool   `gorm:"default:false" json:"order_excused"`
+	VoteExcused  bool   `gorm:"default:false" json:"vote_excused"`
 }
 
 type Order struct {
